@@ -1,3 +1,8 @@
 .venv
 __pycache__
 settings.py
+bootstrap.md
+identity.md
+personality.md
+soul.md
+user.md
