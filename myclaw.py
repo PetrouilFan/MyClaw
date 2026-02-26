@@ -1,20 +1,36 @@
 #!/usr/bin/env python3
 """myclaw — minimal OpenClaw-like LLM middleware."""
 
-import os, importlib.util
+import json
+import os
+import importlib.util
 from pathlib import Path
+
 import httpx
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, Request, HTTPException, Header
+from fastapi.responses import StreamingResponse, JSONResponse
 import uvicorn
 
-WS = Path(os.getenv("MYCLAW_WORKSPACE", Path.home() / "myclaw"))
-from settings import OLLAMA_MODEL, OLLAMA_URL, SYSTEM_PROMPT
+from settings import (
+    WS,
+    OLLAMA_MODEL,
+    OLLAMA_URL,
+    SYSTEM_PROMPT,
+    MYCLAW_API_KEY,
+)
 
 UP = os.getenv("MYCLAW_UPSTREAM", OLLAMA_URL)
-KEY = os.getenv("MYCLAW_API_KEY", "")
+KEY = os.getenv("MYCLAW_API_KEY", MYCLAW_API_KEY)
 MDS = ["SOUL.md", "PERSONALITY.md", "MEMORIES.md"]
 app = FastAPI(title="myclaw")
+
+_tools_cache = None
+_tools_dir_cache = None
+
+
+def _auth(authorization: str = Header(None)):
+    if KEY and authorization != f"Bearer {KEY}" and authorization != KEY:
+        raise HTTPException(401, "Invalid API key")
 
 
 def md() -> str:
@@ -26,15 +42,19 @@ def md() -> str:
 
 
 def tools() -> list:
-    # Check current directory first, then WS
+    global _tools_cache, _tools_dir_cache
     for dir in [Path(__file__).parent, WS]:
+        if dir == _tools_dir_cache and _tools_cache is not None:
+            return _tools_cache
         p = dir / "tools.py"
         if p.exists():
             m = importlib.util.module_from_spec(
                 s := importlib.util.spec_from_file_location("t", p)
             )
             s.loader.exec_module(m)
-            return getattr(m, "TOOLS", [])
+            _tools_cache = getattr(m, "TOOLS", [])
+            _tools_dir_cache = dir
+            return _tools_cache
     return []
 
 
@@ -80,14 +100,18 @@ async def health():
 
 
 @app.get("/md/{f}")
-async def get_md(f: str):
+async def get_md(f: str, authorization: str = Header(None)):
+    if KEY and authorization != f"Bearer {KEY}" and authorization != KEY:
+        raise HTTPException(401, "Invalid API key")
     if f not in MDS:
         raise HTTPException(404)
     return {"filename": f, "content": (WS / f).read_text() if (WS / f).exists() else ""}
 
 
 @app.put("/md/{f}")
-async def put_md(f: str, req: Request):
+async def put_md(f: str, req: Request, authorization: str = Header(None)):
+    if KEY and authorization != f"Bearer {KEY}" and authorization != KEY:
+        raise HTTPException(401, "Invalid API key")
     if f not in MDS:
         raise HTTPException(404)
     WS.mkdir(parents=True, exist_ok=True)
@@ -95,16 +119,37 @@ async def put_md(f: str, req: Request):
     return {"status": "saved"}
 
 
+def _dedupe_tools(client_tools: list, server_tools: list) -> list:
+    client_names = {
+        t.get("function", {}).get("name") for t in client_tools if t.get("function")
+    }
+    return server_tools + [
+        t for t in client_tools if t.get("function", {}).get("name") not in client_names
+    ]
+
+
 @app.post("/v1/chat/completions")
-async def chat(req: Request):
+async def chat(req: Request, authorization: str = Header(None)):
+    if KEY and authorization != f"Bearer {KEY}" and authorization != KEY:
+        raise HTTPException(401, "Invalid API key")
     try:
         p = await req.json()
-        p["model"] = OLLAMA_MODEL
-        block = SYSTEM_PROMPT + "\n\n" + md() if md() else SYSTEM_PROMPT
-        p["messages"] = inject(p.get("messages", []), block)
-        if t := tools():
-            p["tools"] = p.get("tools", []) + t
+        if "messages" not in p:
+            return JSONResponse({"error": "messages is required"}, status_code=400)
+
+        if OLLAMA_MODEL and OLLAMA_MODEL != "llama3.2":
+            p["model"] = OLLAMA_MODEL
+
+        block = md()
+        full_block = SYSTEM_PROMPT + ("\n\n" + block if block else "")
+        p["messages"] = inject(p.get("messages", []), full_block)
+
+        server_tools = tools()
+        if server_tools:
+            p["tools"] = _dedupe_tools(p.get("tools", []), server_tools)
+
         url, h = f"{UP.rstrip('/')}/v1/chat/completions", hdrs(req)
+
         if p.get("stream"):
             c = httpx.AsyncClient(timeout=300)
 
@@ -114,7 +159,6 @@ async def chat(req: Request):
                         async for line in r.aiter_lines():
                             if line:
                                 yield f"{line}\n"
-                        yield "data: [DONE]\n\n"
                 finally:
                     await c.aclose()
 
@@ -124,28 +168,22 @@ async def chat(req: Request):
                 response = await c.post(url, json=p, headers=h)
                 result = response.json()
 
-                # Handle tool calls
                 if "choices" in result:
                     choice = result["choices"][0]
                     msg = choice.get("message", {})
                     tool_calls = msg.get("tool_calls", [])
 
                     while tool_calls:
-                        # Add assistant message with tool calls
                         p["messages"].append(msg)
 
-                        # Execute each tool call
                         for tc in tool_calls:
                             func_name = tc.get("function", {}).get("name")
                             args = tc.get("function", {}).get("arguments", {})
                             if isinstance(args, str):
-                                import json
-
                                 args = json.loads(args)
 
                             tool_result = call_tool(func_name, args)
 
-                            # Add tool result message
                             p["messages"].append(
                                 {
                                     "role": "tool",
@@ -154,7 +192,6 @@ async def chat(req: Request):
                                 }
                             )
 
-                        # Get next response
                         response = await c.post(url, json=p, headers=h)
                         result = response.json()
 
@@ -166,10 +203,14 @@ async def chat(req: Request):
                             break
 
                 return result
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
     except Exception as e:
         import traceback
 
-        return {"error": str(e), "traceback": traceback.format_exc()}, 500
+        return JSONResponse(
+            {"error": str(e), "traceback": traceback.format_exc()}, status_code=500
+        )
 
 
 if __name__ == "__main__":
@@ -179,11 +220,7 @@ if __name__ == "__main__":
         for f in MDS
         if not (WS / f).exists()
     ]
-    print(
-        f"workspace:{WS}  upstream:{UP}  listen:{UP}:{os.getenv('MYCLAW_PORT', '8080')}"
-    )
-    uvicorn.run(
-        app,
-        host=os.getenv("MYCLAW_HOST", "0.0.0.0"),
-        port=int(os.getenv("MYCLAW_PORT", "8080")),
-    )
+    host = os.getenv("MYCLAW_HOST", "0.0.0.0")
+    port = int(os.getenv("MYCLAW_PORT", "8080"))
+    print(f"workspace:{WS}  upstream:{UP}  listen:{host}:{port}")
+    uvicorn.run(app, host=host, port=port)
