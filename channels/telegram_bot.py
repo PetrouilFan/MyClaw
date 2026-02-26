@@ -5,9 +5,16 @@ from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, MessageHandler, ContextTypes, filters
 
-from settings import TELEGRAM_BOT_TOKEN, OLLAMA_MODEL, SYSTEM_PROMPT, WS, MYCLAW_API_KEY
+from settings import (
+    TELEGRAM_BOT_TOKEN,
+    OLLAMA_MODEL,
+    SYSTEM_PROMPT,
+    WS,
+    MYCLAW_API_KEY,
+    MDS,
+    MYCLAW_URL,
+)
 
-MDS = ["SOUL.md", "PERSONALITY.md", "MEMORIES.md"]
 http = httpx.AsyncClient(timeout=300)
 histories: dict[int, list] = {}
 
@@ -36,11 +43,11 @@ async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if MYCLAW_API_KEY:
         headers["Authorization"] = f"Bearer {MYCLAW_API_KEY}"
 
-    resp, full = "", ""
+    full = ""
     try:
         async with http.stream(
             "POST",
-            "http://localhost:8080/v1/chat/completions",
+            f"{MYCLAW_URL}/v1/chat/completions",
             json={"model": OLLAMA_MODEL, "messages": histories[uid], "stream": True},
             headers=headers,
         ) as r:

@@ -16,17 +16,17 @@ from settings import (
     MYCLAW_API_KEY,
     MAX_TOOL_CALLS,
     MAX_PAYLOAD_SIZE,
+    MDS,
+    MYCLAW_HOST,
+    MYCLAW_PORT,
 )
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
-log, UP, KEY, MDS = (
-    logging.getLogger(__name__),
-    os.getenv("MYCLAW_UPSTREAM", OLLAMA_URL),
-    os.getenv("MYCLAW_API_KEY", MYCLAW_API_KEY),
-    ["SOUL.md", "PERSONALITY.md", "MEMORIES.md"],
-)
+UP = os.getenv("MYCLAW_UPSTREAM", OLLAMA_URL)
+KEY = os.getenv("MYCLAW_API_KEY", MYCLAW_API_KEY)
+
 app = FastAPI(title="myclaw")
 app.add_middleware(
     CORSMiddleware,
@@ -35,11 +35,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-_t = _td = _tf = None
 
-md = lambda: "\n\n".join(
-    f"<!-- {n} -->\n{(WS / n).read_text().strip()}" for n in MDS if (WS / n).exists()
-)
+_t = _td = _tf = None
+http = httpx.AsyncClient(timeout=300)
+app.on_event("shutdown")(lambda: http.aclose())
+
+
+def md() -> str:
+    return "\n\n".join(
+        f"<!-- {n} -->\n{(WS / n).read_text().strip()}"
+        for n in MDS
+        if (WS / n).exists()
+    )
 
 
 def tools():
@@ -64,35 +71,32 @@ def call_tool(n, a):
     return _tf[n](**a) if _tf and n in _tf else f"Tool {n} not found"
 
 
-inject = lambda m, b: (
-    [{"role": "system", "content": b}]
-    + [
+def inject(messages, base_content):
+    if not base_content:
+        return list(messages) if messages else []
+    return [{"role": "system", "content": base_content}] + [
         {"role": x["role"], "content": x["content"]}
-        for x in (m or [])
+        for x in (messages or [])
         if x.get("role") != "system"
     ]
-    if b
-    else list(m)
-    if m
-    else []
-)
-hdrs = lambda r: {
-    "Authorization": (f"Bearer {KEY}" if KEY else r.headers.get("authorization", "")),
-    "Content-Type": "application/json",
-}
-_auth = lambda a: KEY and a != f"Bearer {KEY}" and a != KEY
-_dedupe = lambda c, s: (
-    s
-    + [
-        t
-        for t in c
-        if (t.get("function") or {}).get("name")
-        not in {(x.get("function") or {}).get("name") for x in c}
-    ]
-)
 
-http = httpx.AsyncClient(timeout=300)
-app.on_event("shutdown")(lambda: http.aclose())
+
+def hdrs(r):
+    return {
+        "Authorization": f"Bearer {KEY}" if KEY else r.headers.get("authorization", ""),
+        "Content-Type": "application/json",
+    }
+
+
+def _auth(a):
+    return KEY and a != f"Bearer {KEY}" and a != KEY
+
+
+def _dedupe(client_tools, server_tools):
+    seen = {(x.get("function") or {}).get("name") for x in client_tools}
+    return server_tools + [
+        t for t in client_tools if (t.get("function") or {}).get("name") not in seen
+    ]
 
 
 @app.get("/health")
@@ -131,11 +135,6 @@ async def chat(r: Request, a=Header(None)):
     if _auth(a):
         raise HTTPException(401, "Invalid API key")
     try:
-        if c := r.headers.get("content-length"):
-            try:
-                int(c) > MAX_PAYLOAD_SIZE
-            except ValueError:
-                pass
         p = await r.json()
         if "messages" not in p:
             return JSONResponse({"error": "messages required"}, 400)
@@ -204,7 +203,8 @@ async def chat(r: Request, a=Header(None)):
 
 if __name__ == "__main__":
     WS.mkdir(parents=True, exist_ok=True)
-    [(WS / f).write_text(f"# {f[:-3]}\n") for f in MDS if not (WS / f).exists()]
-    h, p = os.getenv("MYCLAW_HOST", "0.0.0.0"), int(os.getenv("MYCLAW_PORT", "8080"))
-    print(f"workspace:{WS} upstream:{UP} listen:{h}:{p}")
-    uvicorn.run(app, host=h, port=p)
+    for f in MDS:
+        if not (WS / f).exists():
+            (WS / f).write_text(f"# {f[:-3]}\n")
+    print(f"workspace:{WS} upstream:{UP} listen:{MYCLAW_HOST}:{MYCLAW_PORT}")
+    uvicorn.run(app, host=MYCLAW_HOST, port=MYCLAW_PORT)

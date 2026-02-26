@@ -1,16 +1,8 @@
 from pathlib import Path
-
-
-def _is_safe_path(path: Path, base: Path) -> bool:
-    try:
-        resolved = path.resolve()
-        return resolved.is_relative_to(base.resolve())
-    except (ValueError, OSError):
-        return False
+from tools._utils import _is_safe_path
 
 
 def overwrite_file(filepath: str, content: str, base_dir: str = None):
-    """Overwrite a file with new content."""
     base = Path(base_dir) if base_dir else Path.cwd()
     p = (base / filepath).resolve()
     if not _is_safe_path(p, base):

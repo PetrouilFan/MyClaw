@@ -1,12 +1,7 @@
-import asyncio
-import os
-import platform
-import uuid
-import signal
+import asyncio, os, platform, uuid, signal
 from pathlib import Path
 from typing import Optional, Callable
 from datetime import datetime
-from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 
 OUTPUT_DIR = Path("workspace/command_outputs")
@@ -31,8 +26,27 @@ def _get_loop() -> asyncio.AbstractEventLoop:
     return _loop
 
 
-def _get_shell() -> str:
-    return "cmd.exe" if platform.system() == "Windows" else "sh"
+def _write_initial(filepath: str, command: str):
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(f"[{datetime.now().isoformat()}] $ {command}\n")
+
+
+def _write_output(filepath: str, text: str):
+    with open(filepath, "a", encoding="utf-8") as f:
+        f.write(text)
+
+
+def _truncate_file_safe(filepath: str, max_lines: int = MAX_OUTPUT_LINES):
+    try:
+        if not os.path.exists(filepath):
+            return
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        if len(lines) > max_lines:
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.writelines(lines[-max_lines:])
+    except Exception:
+        pass
 
 
 async def run_command(
@@ -89,18 +103,15 @@ async def run_command(
                         break
                     text = line.decode("utf-8", errors="replace")
                     await loop.run_in_executor(None, _write_output, output_path, text)
-
                     proc_info["line_count"] += 1
                     _truncate_counter[output_path] = (
                         _truncate_counter.get(output_path, 0) + 1
                     )
-
                     if _truncate_counter[output_path] >= TRUNCATE_EVERY:
                         await loop.run_in_executor(
                             None, _truncate_file_safe, output_path
                         )
                         _truncate_counter[output_path] = 0
-
                     if on_output:
                         try:
                             on_output(text)
@@ -138,29 +149,6 @@ async def run_command(
     }
 
 
-def _write_initial(filepath: str, command: str):
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(f"[{datetime.now().isoformat()}] $ {command}\n")
-
-
-def _write_output(filepath: str, text: str):
-    with open(filepath, "a", encoding="utf-8") as f:
-        f.write(text)
-
-
-def _truncate_file_safe(filepath: str, max_lines: int = MAX_OUTPUT_LINES):
-    try:
-        if not os.path.exists(filepath):
-            return
-        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-        if len(lines) > max_lines:
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.writelines(lines[-max_lines:])
-    except Exception:
-        pass
-
-
 async def wait_command(process_id: int, timeout: Optional[float] = None) -> dict:
     proc_info = _processes.get(process_id)
     if not proc_info:
@@ -187,40 +175,6 @@ async def wait_command(process_id: int, timeout: Optional[float] = None) -> dict
         return {"error": "Timeout waiting for process", "status": "timeout"}
 
 
-def read_output(process_id: int, lines: int = 100, from_start: bool = False) -> dict:
-    proc_info = _processes.get(process_id)
-    if not proc_info:
-        return {"error": f"Process {process_id} not found", "exists": False}
-
-    output_file = proc_info["output_file"]
-
-    if not os.path.exists(output_file):
-        return {"error": "Output file not found", "output_file": output_file}
-
-    try:
-        with open(output_file, "r", encoding="utf-8", errors="replace") as f:
-            all_lines = f.readlines()
-
-        if from_start:
-            selected = all_lines[:lines]
-        else:
-            selected = all_lines[-lines:] if len(all_lines) > lines else all_lines
-
-        return {
-            "pid": process_id,
-            "lines": len(selected),
-            "total_lines": len(all_lines),
-            "output": "".join(selected),
-            "output_file": output_file,
-        }
-    except Exception as e:
-        return {"error": str(e)}
-
-
-def read_full_output(process_id: int) -> dict:
-    return read_output(process_id, lines=100000, from_start=True)
-
-
 async def kill_command(process_id: int) -> dict:
     proc_info = _processes.get(process_id)
     if not proc_info:
@@ -244,18 +198,47 @@ async def kill_command(process_id: int) -> dict:
         return {"error": str(e)}
 
 
+def read_output(process_id: int, lines: int = 100, from_start: bool = False) -> dict:
+    proc_info = _processes.get(process_id)
+    if not proc_info:
+        return {"error": f"Process {process_id} not found", "exists": False}
+
+    output_file = proc_info["output_file"]
+
+    if not os.path.exists(output_file):
+        return {"error": "Output file not found", "output_file": output_file}
+
+    try:
+        with open(output_file, "r", encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+
+        selected = (
+            all_lines[:lines]
+            if from_start
+            else (all_lines[-lines:] if len(all_lines) > lines else all_lines)
+        )
+
+        return {
+            "pid": process_id,
+            "lines": len(selected),
+            "total_lines": len(all_lines),
+            "output": "".join(selected),
+            "output_file": output_file,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def cleanup_processes(keep_running: bool = True) -> int:
     removed = 0
-    to_remove = []
-
-    for pid, info in _processes.items():
-        if info["status"] != "running" or not keep_running:
-            to_remove.append(pid)
-
+    to_remove = [
+        pid
+        for pid, info in _processes.items()
+        if info["status"] != "running" or not keep_running
+    ]
     for pid in to_remove:
         del _processes[pid]
         removed += 1
-
     return removed
 
 
@@ -272,6 +255,46 @@ def list_processes(status_filter: Optional[str] = None) -> dict:
         if status_filter is None or info["status"] == status_filter
     ]
     return {"processes": processes, "total": len(processes)}
+
+
+def run_terminal_command(
+    command: str,
+    background: bool = False,
+    cwd: Optional[str] = None,
+    env: Optional[dict] = None,
+    timeout: Optional[float] = None,
+) -> dict:
+    return _get_loop().run_until_complete(
+        run_command(
+            command=command, background=background, cwd=cwd, env=env, timeout=timeout
+        )
+    )
+
+
+def wait_terminal_command(process_id: int, timeout: Optional[float] = None) -> dict:
+    return _get_loop().run_until_complete(
+        wait_command(process_id=process_id, timeout=timeout)
+    )
+
+
+def kill_terminal_command(process_id: int) -> dict:
+    return _get_loop().run_until_complete(kill_command(process_id=process_id))
+
+
+def list_terminal_commands(status_filter: Optional[str] = None) -> dict:
+    return list_processes(status_filter)
+
+
+def cleanup_terminal_processes(keep_running: bool = True) -> dict:
+    removed = cleanup_processes(keep_running)
+    return {"removed": removed, "remaining": len(_processes)}
+
+
+def get_terminal_help() -> dict:
+    help_path = Path("workspace/terminal_help.md")
+    if help_path.exists():
+        return {"usage_guide": help_path.read_text(encoding="utf-8")}
+    return {"usage_guide": "See workspace/terminal_help.md for usage guide"}
 
 
 TOOLS = [
@@ -364,7 +387,7 @@ TOOLS = [
                     "process_id": {
                         "type": "integer",
                         "description": "The process ID (PID) to kill",
-                    },
+                    }
                 },
                 "required": ["process_id"],
             },
@@ -381,7 +404,7 @@ TOOLS = [
                     "status_filter": {
                         "type": "string",
                         "description": "Filter by status: 'running', 'completed', 'failed', 'terminated'. Omit for all processes.",
-                    },
+                    }
                 },
                 "required": [],
             },
@@ -399,7 +422,7 @@ TOOLS = [
                         "type": "boolean",
                         "description": "If true, keeps running processes. If false, removes all including running.",
                         "default": True,
-                    },
+                    }
                 },
                 "required": [],
             },
@@ -410,113 +433,15 @@ TOOLS = [
         "function": {
             "name": "get_terminal_help",
             "description": "Get detailed usage guide for terminal command tools. Includes parallel execution patterns, examples, and best practices.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
+            "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
 ]
 
-
-def run_terminal_command(
-    command: str,
-    background: bool = False,
-    cwd: Optional[str] = None,
-    env: Optional[dict] = None,
-    timeout: Optional[float] = None,
-) -> dict:
-    return _get_loop().run_until_complete(
-        run_command(
-            command=command, background=background, cwd=cwd, env=env, timeout=timeout
-        )
-    )
-
-
-def wait_terminal_command(process_id: int, timeout: Optional[float] = None) -> dict:
-    return _get_loop().run_until_complete(
-        wait_command(process_id=process_id, timeout=timeout)
-    )
-
-
-def kill_terminal_command(process_id: int) -> dict:
-    return _get_loop().run_until_complete(kill_command(process_id=process_id))
-
-
-def list_terminal_commands(status_filter: Optional[str] = None) -> dict:
-    return list_processes(status_filter)
-
-
-def cleanup_terminal_processes(keep_running: bool = True) -> dict:
-    removed = cleanup_processes(keep_running)
-    return {"removed": removed, "remaining": len(_processes)}
-
-
-read_command_output = read_output
-
-
-def get_terminal_help() -> dict:
-    return {
-        "usage_guide": """
-# Terminal Command Tool - Usage Guide
-
-## Quick Start
-1. Run command: run_terminal_command(command="echo hello", background=False)
-2. Get PID from result
-3. Read output: read_command_output(process_id=PID, lines=100)
-
-## Parallel Execution Pattern
-# Start multiple commands in background
-pid1 = run_terminal_command("npm run build", background=True)["pid"]
-pid2 = run_terminal_command("npm run test", background=True)["pid"]
-pid3 = run_terminal_command("npm run lint", background=True)["pid"]
-
-# Wait for specific one
-result = wait_terminal_command(pid1, timeout=60)
-
-# Or wait for all
-for pid in [pid1, pid2, pid3]:
-    wait_terminal_command(pid, timeout=120)
-
-# Read output while running (for long tasks)
-output = read_command_output(pid1, lines=50)
-
-## Reading Output
-- Default: read last 100 lines
-- read_command_output(pid, lines=50) - last 50 lines
-- read_command_output(pid, lines=1000) - more context
-- read_command_output(pid, from_start=True) - from beginning
-- read_command_output(pid, lines=100000, from_start=True) - full output
-
-## Process Management
-- list_terminal_commands() - see all processes
-- list_terminal_commands(status_filter="running") - only running
-- kill_terminal_command(pid) - stop a process
-- cleanup_terminal_processes() - free memory from completed processes
-
-## Tips
-- Use background=true for parallel execution
-- Poll output with read_command_output while running
-- Call cleanup_terminal_processes() periodically
-- Output file location: workspace/command_outputs/{uuid}.log
-- Max 2000 lines buffered per command
-""",
-        "tools": [
-            "run_terminal_command",
-            "wait_terminal_command",
-            "read_command_output",
-            "kill_terminal_command",
-            "list_terminal_commands",
-            "cleanup_terminal_processes",
-        ],
-    }
-
-
 TOOL_FUNCTIONS = {
     "run_terminal_command": run_terminal_command,
     "wait_terminal_command": wait_terminal_command,
-    "read_command_output": read_command_output,
+    "read_command_output": read_output,
     "kill_terminal_command": kill_terminal_command,
     "list_terminal_commands": list_terminal_commands,
     "cleanup_terminal_processes": cleanup_terminal_processes,
