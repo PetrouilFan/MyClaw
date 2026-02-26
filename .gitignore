@@ -2,7 +2,4 @@
 __pycache__
 settings.py
 bootstrap.md
-workspace/identity.md
-workspace/personality.md
-workspace/soul.md
-workspace/user.md
+workspace/*
