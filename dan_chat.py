@@ -22,6 +22,11 @@ def extract_answer(text: str) -> str:
     if match:
         return match.group(1).strip()
 
+    # Handle "Alright, here's the response:" pattern
+    if "Alright, here's the response:" in text:
+        after = text.split("Alright, here's the response:", 1)[1]
+        return after.strip()
+
     text = text.strip()
     if "\n" in text:
         lines = [l.strip() for l in text.split("\n") if l.strip()]
@@ -183,7 +188,6 @@ class DANApp(App):
             }
 
             full_response = ""
-            is_thinking = False
 
             with httpx.Client(timeout=300) as client:
                 with client.stream(
@@ -195,10 +199,20 @@ class DANApp(App):
                     for line in response.iter_lines():
                         if not line:
                             continue
-                        if not line.startswith("data:"):
+
+                        line_str = (
+                            line.decode("utf-8") if isinstance(line, bytes) else line
+                        )
+
+                        # Skip empty or non-data lines
+                        if not line_str.strip() or not line_str.startswith("data"):
                             continue
 
-                        data = line[5:].strip()
+                        # Extract JSON from data: prefix
+                        data = line_str
+                        if line_str.startswith("data:"):
+                            data = line_str[5:].strip()
+
                         if data == "[DONE]":
                             break
                         if not data:
@@ -209,53 +223,33 @@ class DANApp(App):
                         except json.JSONDecodeError:
                             continue
 
-                        chunk_text = ""
+                        # Get delta content from chunk
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        content = delta.get("content", "") or ""
+                        reasoning = delta.get("reasoning", "") or ""
 
-                        msg = chunk.get("message", {})
-                        thinking = (
-                            msg.get("reasoning", "") or msg.get("thinking", "") or ""
-                        )
-                        content = msg.get("content", "") or ""
-
-                        if thinking:
-                            if not is_thinking:
-                                chunk_text += "_Thinking..._\n\n> "
-                                is_thinking = True
-                            chunk_text += thinking.replace("\n", "\n> ")
-
-                        if content:
-                            if is_thinking:
-                                chunk_text += "\n\n"
-                                is_thinking = False
-                            chunk_text += content
-
-                        if chunk_text:
+                        if content or reasoning:
+                            chunk_text = reasoning + content if reasoning else content
                             full_response += chunk_text
-                            display_text = extract_answer(full_response)
-                            self.app.call_from_thread(dan_msg.append_text, display_text)
+                            # Only pass the new chunk to append
+                            self.app.call_from_thread(dan_msg.append_text, chunk_text)
                             self.app.call_from_thread(
                                 self.query_one("#chat_container").scroll_end
                             )
 
-            self.chat_history.append(
-                {"role": "assistant", "content": extract_answer(full_response)}
-            )
+            # Extract answer at the end
+            final_response = extract_answer(full_response)
+            # Store full response in history so model sees its full output
+            self.chat_history.append({"role": "assistant", "content": full_response})
 
         except Exception as e:
             err_msg = str(e)
-            if (
-                "peer closed connection" in err_msg.lower()
-                or "incomplete" in err_msg.lower()
-            ):
+            self.app.call_from_thread(self.system_message, f"Stream error: {err_msg}")
+            if "connection" in err_msg.lower() or "closed" in err_msg.lower():
                 self.app.call_from_thread(
-                    self.system_message,
-                    "Connection dropped. Retrying with non-streaming...",
+                    self.system_message, "Retrying with non-streaming..."
                 )
                 self.generate_response_fallback(dan_msg)
-            else:
-                self.app.call_from_thread(
-                    self.system_message, f"Generation encountered an error: {e}"
-                )
 
     def generate_response_fallback(self, dan_msg: ChatMessage) -> None:
         try:

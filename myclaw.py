@@ -26,14 +26,33 @@ def md() -> str:
 
 
 def tools() -> list:
-    p = WS / "tools.py"
-    if not p.exists():
-        return []
-    m = importlib.util.module_from_spec(
-        s := importlib.util.spec_from_file_location("t", p)
-    )
-    s.loader.exec_module(m)
-    return getattr(m, "TOOLS", [])
+    # Check current directory first, then WS
+    for dir in [Path(__file__).parent, WS]:
+        p = dir / "tools.py"
+        if p.exists():
+            m = importlib.util.module_from_spec(
+                s := importlib.util.spec_from_file_location("t", p)
+            )
+            s.loader.exec_module(m)
+            return getattr(m, "TOOLS", [])
+    return []
+
+
+def call_tool(name: str, arguments: dict) -> str:
+    for dir in [Path(__file__).parent, WS]:
+        p = dir / "tools.py"
+        if p.exists():
+            m = importlib.util.module_from_spec(
+                s := importlib.util.spec_from_file_location("t", p)
+            )
+            s.loader.exec_module(m)
+            tool_funcs = getattr(m, "TOOL_FUNCTIONS", {})
+            if name in tool_funcs:
+                try:
+                    return tool_funcs[name](**arguments)
+                except Exception as e:
+                    return f"Error: {str(e)}"
+    return f"Tool {name} not found"
 
 
 def inject(msgs, block):
@@ -86,16 +105,67 @@ async def chat(req: Request):
         if t := tools():
             p["tools"] = p.get("tools", []) + t
         url, h = f"{UP.rstrip('/')}/v1/chat/completions", hdrs(req)
-        async with httpx.AsyncClient(timeout=120) as c:
-            if p.get("stream"):
+        if p.get("stream"):
+            c = httpx.AsyncClient(timeout=300)
 
-                async def gen():
+            async def gen():
+                try:
                     async with c.stream("POST", url, json=p, headers=h) as r:
-                        async for chunk in r.aiter_bytes():
-                            yield chunk
+                        async for line in r.aiter_lines():
+                            if line:
+                                yield f"{line}\n"
+                        yield "data: [DONE]\n\n"
+                finally:
+                    await c.aclose()
 
-                return StreamingResponse(gen(), media_type="text/event-stream")
-            return (await c.post(url, json=p, headers=h)).json()
+            return StreamingResponse(gen(), media_type="text/event-stream")
+        else:
+            async with httpx.AsyncClient(timeout=300) as c:
+                response = await c.post(url, json=p, headers=h)
+                result = response.json()
+
+                # Handle tool calls
+                if "choices" in result:
+                    choice = result["choices"][0]
+                    msg = choice.get("message", {})
+                    tool_calls = msg.get("tool_calls", [])
+
+                    while tool_calls:
+                        # Add assistant message with tool calls
+                        p["messages"].append(msg)
+
+                        # Execute each tool call
+                        for tc in tool_calls:
+                            func_name = tc.get("function", {}).get("name")
+                            args = tc.get("function", {}).get("arguments", {})
+                            if isinstance(args, str):
+                                import json
+
+                                args = json.loads(args)
+
+                            tool_result = call_tool(func_name, args)
+
+                            # Add tool result message
+                            p["messages"].append(
+                                {
+                                    "role": "tool",
+                                    "name": func_name,
+                                    "content": str(tool_result),
+                                }
+                            )
+
+                        # Get next response
+                        response = await c.post(url, json=p, headers=h)
+                        result = response.json()
+
+                        if "choices" in result:
+                            choice = result["choices"][0]
+                            msg = choice.get("message", {})
+                            tool_calls = msg.get("tool_calls", [])
+                        else:
+                            break
+
+                return result
     except Exception as e:
         import traceback
 
