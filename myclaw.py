@@ -108,14 +108,14 @@ async def _ic(a=Header(None)):
 
 
 @app.get("/md/{f}")
-async def _gf(f, a=Header(None), r=Request()):
+async def _gf(f, r: Request, a=Header(None)):
     if _auth(a) or f not in MDS:
         raise HTTPException(401 if _auth(a) else 404)
     return {"filename": f, "content": (WS / f).read_text() if (WS / f).exists() else ""}
 
 
 @app.put("/md/{f}")
-async def _pf(f, a=Header(None), r=Request()):
+async def _pf(f, r: Request, a=Header(None)):
     if _auth(a) or f not in MDS:
         raise HTTPException(401 if _auth(a) else 404)
     b = await r.body()
