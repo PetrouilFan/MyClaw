@@ -126,16 +126,17 @@ class DANApp(App):
         ]
 
         for md_file in md_files:
-            if os.path.exists(md_file):
+            md_path = WS / md_file
+            if md_path.exists():
                 try:
-                    with open(md_file, "r", encoding="utf-8") as f:
+                    with md_path.open("r", encoding="utf-8") as f:
                         md_content = f.read()
 
                     section_name = md_file.replace(".md", "").replace("_", " ").title()
                     system_prompt += f"\n\n--- {section_name} ---\n{md_content}"
 
                     if md_file == "bootstrap.md":
-                        os.remove(md_file)
+                        md_path.unlink()
                         self.add_message("System", f"Loaded and deleted {md_file}.")
                     else:
                         self.add_message("System", f"Loaded {md_file}.")
