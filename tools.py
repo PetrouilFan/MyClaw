@@ -34,7 +34,6 @@ def _build_tool_schema(func):
 
 TOOL_FUNCTIONS = {
     "get_time": get_time,
-    "search_memories": search_memories,
     "read_file": read_file,
     "append_to_file": append_to_file,
     "overwrite_file": overwrite_file,
@@ -42,5 +41,5 @@ TOOL_FUNCTIONS = {
 }
 TOOLS = [
     _build_tool_schema(f)
-    for f in [get_time, search_memories, read_file, append_to_file, overwrite_file]
+    for f in [get_time, read_file, append_to_file, overwrite_file]
 ] + TERMINAL_TOOLS

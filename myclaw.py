@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """myclaw — minimal OpenClaw-like LLM middleware."""
 
+import re
 import json, logging, os
 from pathlib import Path
 import httpx
@@ -21,6 +22,8 @@ from settings import (
     MYCLAW_HOST,
     MYCLAW_PORT,
 )
+
+os.environ["MYCLAW_WORKSPACE"] = str(WS)
 from tools._loader import load_tools, invalidate_cache
 
 logging.basicConfig(
@@ -79,6 +82,44 @@ def call_tool(n, a):
         except Exception as e:
             return {"error": str(e), "success": False}
     return {"error": f"Tool {n} not found", "success": False}
+
+
+def extract_tool_calls(msg: dict) -> list:
+    ts = msg.get("tool_calls", [])
+    if ts:
+        return ts
+    combined = (msg.get("reasoning", "") or "") + "\n" + (msg.get("content", "") or "")
+    matches = re.findall(r"<tool_call>(.*?)</tool_call>", combined, re.DOTALL)
+    trailing = re.findall(r"(.*?)\s*</tool_call>", combined, re.DOTALL)
+    for t in trailing:
+        if t not in matches:
+            matches.append(t)
+    json_like = re.findall(r'\{[^{}]*"name"[^{}]*"arguments"[^{}]*\}', combined)
+    for j in json_like:
+        if j not in matches:
+            matches.append(j)
+
+    for raw in matches:
+        try:
+            parsed = json.loads(raw.strip())
+            name = parsed.get("name", "")
+            args = parsed.get("arguments", {})
+            if name:
+                ts.append({"function": {"name": name, "arguments": args}})
+        except Exception:
+            try:
+                raw_fixed = raw.strip().replace("'", '"')
+                if raw_fixed.count("}") > raw_fixed.count("{"):
+                    raw_fixed = "{" + raw_fixed.rsplit("}", 1)[0] + "}"
+                raw_fixed = re.sub(r",[^}]*$", "", raw_fixed)
+                parsed = json.loads(raw_fixed)
+                name = parsed.get("name", "")
+                args = parsed.get("arguments", {})
+                if name:
+                    ts.append({"function": {"name": name, "arguments": args}})
+            except Exception:
+                pass
+    return ts
 
 
 def _auth(a):
@@ -193,11 +234,34 @@ async def chat(r: Request, a=Header(None)):
                 return JSONResponse({"error": "Invalid JSON from upstream"}, 502)
             if "choices" not in R:
                 return R
-            m, ts = (
-                R["choices"][0]["message"],
-                R["choices"][0]["message"].get("tool_calls", []),
-            )
+            m = R["choices"][0]["message"]
+            ts = extract_tool_calls(m)
+            logging.debug(f"extract_tool_calls found: {ts}")
             if not ts:
+                content = m.get("content", "") or ""
+                reasoning = m.get("reasoning", "") or ""
+                # Check both reasoning and content for tool call blocks
+                combined = reasoning + "\n" + content
+                if combined:
+                    # Remove <tool_call>...</tool_call> blocks
+                    content = re.sub(
+                        r"<tool_call>.*?</tool_call>",
+                        "",
+                        combined.strip(),
+                        flags=re.DOTALL,
+                    ).strip()
+                    # Also remove trailing </tool_call> without opening tag
+                    content = re.sub(r"</tool_call>\s*$", "", content).strip()
+                # Safety: if content still looks like a raw tool call, discard it
+                if content and (
+                    content.strip().startswith("<tool_call>")
+                    or (
+                        content.strip().startswith('"name":')
+                        and '"arguments"' in content
+                    )
+                ):
+                    content = ""
+                R["choices"][0]["message"]["content"] = content
                 return R
             p["messages"].append(m)
             for t_ in ts:

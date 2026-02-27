@@ -5,7 +5,7 @@ from pathlib import Path
 
 def search_memories(query: str):
     """Search MEMORIES.md for a term."""
-    ws = Path(os.getenv("MYCLAW_WORKSPACE", Path.home() / "myclaw"))
+    ws = Path(os.getenv("MYCLAW_WORKSPACE", Path(__file__).parent.parent / "workspace"))
     mem_file = ws / "MEMORIES.md"
     if not mem_file.exists():
         return "MEMORIES.md not found."

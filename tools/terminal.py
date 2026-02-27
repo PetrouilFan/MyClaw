@@ -60,7 +60,10 @@ async def run_command(
 
     output_file = OUTPUT_DIR / f"{uuid.uuid4()}.log"
     output_path = str(output_file)
-    loop = asyncio.get_event_loop()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = _get_loop()
     await loop.run_in_executor(None, _write_initial, output_path, command)
 
     full_env = {**os.environ, **(env or {})}
@@ -245,21 +248,58 @@ def run_terminal_command(
     env: Optional[dict] = None,
     timeout: Optional[float] = None,
 ) -> dict:
-    return _get_loop().run_until_complete(
-        run_command(
-            command=command, background=background, cwd=cwd, env=env, timeout=timeout
+    import threading
+
+    result = {}
+
+    def run():
+        nonlocal result
+        result = _get_loop().run_until_complete(
+            run_command(
+                command=command,
+                background=background,
+                cwd=cwd,
+                env=env,
+                timeout=timeout,
+            )
         )
-    )
+
+    t = threading.Thread(target=run)
+    t.start()
+    t.join()
+    return result
 
 
 def wait_terminal_command(process_id: int, timeout: Optional[float] = None) -> dict:
-    return _get_loop().run_until_complete(
-        wait_command(process_id=process_id, timeout=timeout)
-    )
+    import threading
+
+    result = {}
+
+    def run():
+        nonlocal result
+        result = _get_loop().run_until_complete(
+            wait_command(process_id=process_id, timeout=timeout)
+        )
+
+    t = threading.Thread(target=run)
+    t.start()
+    t.join()
+    return result
 
 
 def kill_terminal_command(process_id: int) -> dict:
-    return _get_loop().run_until_complete(kill_command(process_id=process_id))
+    import threading
+
+    result = {}
+
+    def run():
+        nonlocal result
+        result = _get_loop().run_until_complete(kill_command(process_id=process_id))
+
+    t = threading.Thread(target=run)
+    t.start()
+    t.join()
+    return result
 
 
 def list_terminal_commands(status_filter: Optional[str] = None) -> dict:
