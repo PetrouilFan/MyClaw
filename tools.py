@@ -33,17 +33,13 @@ def _build_tool_schema(func):
 
 
 TOOL_FUNCTIONS = {
-    **dict.fromkeys(
-        ["get_time", "search_memories", "read_file", "append_to_file", "overwrite_file"]
-    ),
+    "get_time": get_time,
+    "search_memories": search_memories,
+    "read_file": read_file,
+    "append_to_file": append_to_file,
+    "overwrite_file": overwrite_file,
     **TERMINAL_TOOL_FUNCTIONS,
 }
-TOOL_FUNCTIONS["get_time"] = get_time
-TOOL_FUNCTIONS["search_memories"] = search_memories
-TOOL_FUNCTIONS["read_file"] = read_file
-TOOL_FUNCTIONS["append_to_file"] = append_to_file
-TOOL_FUNCTIONS["overwrite_file"] = overwrite_file
-
 TOOLS = [
     _build_tool_schema(f)
     for f in [get_time, search_memories, read_file, append_to_file, overwrite_file]

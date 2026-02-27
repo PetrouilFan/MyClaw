@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """myclaw — minimal OpenClaw-like LLM middleware."""
 
-import json, logging, os, importlib.util
+import json, logging, os
 from pathlib import Path
 import httpx
 from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 import uvicorn
 from settings import (
     WS,
@@ -20,14 +21,26 @@ from settings import (
     MYCLAW_HOST,
     MYCLAW_PORT,
 )
+from tools._loader import load_tools, invalidate_cache
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 UP = os.getenv("MYCLAW_UPSTREAM", OLLAMA_URL)
 KEY = os.getenv("MYCLAW_API_KEY", MYCLAW_API_KEY)
+CHECK_UPSTREAM = os.getenv("MYCLAW_CHECK_UPSTREAM", "").lower() in ("1", "true", "yes")
 
-app = FastAPI(title="myclaw")
+http = httpx.AsyncClient(timeout=300)
+_t, _tf = None, None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await http.aclose()
+
+
+app = FastAPI(title="myclaw", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -36,66 +49,46 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_t = _td = _tf = None
-http = httpx.AsyncClient(timeout=300)
-app.on_event("shutdown")(lambda: http.aclose())
-
 
 def md() -> str:
-    return "\n\n".join(
-        f"<!-- {n} -->\n{(WS / n).read_text().strip()}"
-        for n in MDS
-        if (WS / n).exists()
-    )
+    parts = []
+    for n in MDS:
+        try:
+            fp = WS / n
+            if fp.exists():
+                parts.append(f"<!-- {n} -->\n{fp.read_text().strip()}")
+        except Exception as e:
+            logging.warning(f"Failed to read {n}: {e}")
+    return "\n\n".join(parts)
 
 
 def tools():
-    global _t, _td, _tf
-    for d in [Path(__file__).parent, WS]:
-        if d == _td and _t:
-            return _t
-        p = d / "tools.py"
-        if p.exists():
-            m = importlib.util.module_from_spec(
-                s := importlib.util.spec_from_file_location("t", p)
-            )
-            s.loader.exec_module(m)
-            _tf, _t, _td = getattr(m, "TOOL_FUNCTIONS", {}), getattr(m, "TOOLS", []), d
-            return _t
-    return []
+    global _t, _tf
+    if _t is None:
+        _t, _tf = load_tools(project_root=Path(__file__).parent, workspace=WS)
+    return _t
 
 
 def call_tool(n, a):
     global _tf
-    _tf or tools()
-    return _tf[n](**a) if _tf and n in _tf else f"Tool {n} not found"
-
-
-def inject(messages, base_content):
-    if not base_content:
-        return list(messages) if messages else []
-    return [{"role": "system", "content": base_content}] + [
-        {"role": x["role"], "content": x["content"]}
-        for x in (messages or [])
-        if x.get("role") != "system"
-    ]
-
-
-def hdrs(r):
-    return {
-        "Authorization": f"Bearer {KEY}" if KEY else r.headers.get("authorization", ""),
-        "Content-Type": "application/json",
-    }
+    if _tf is None:
+        tools()
+    if _tf and n in _tf:
+        try:
+            return _tf[n](**a)
+        except Exception as e:
+            return {"error": str(e), "success": False}
+    return {"error": f"Tool {n} not found", "success": False}
 
 
 def _auth(a):
     return KEY and a != f"Bearer {KEY}" and a != KEY
 
 
-def _dedupe(client_tools, server_tools):
-    seen = {(x.get("function") or {}).get("name") for x in client_tools}
-    return server_tools + [
-        t for t in client_tools if (t.get("function") or {}).get("name") not in seen
+def _dedupe(client, server):
+    seen = {(x.get("function") or {}).get("name") for x in client}
+    return server + [
+        t for t in client if (t.get("function") or {}).get("name") not in seen
     ]
 
 
@@ -106,13 +99,16 @@ def _h():
 
 @app.post("/_invalidate_cache")
 async def _ic(a=Header(None)):
-    global _t, _td, _tf
-    _t = _td = _tf = None
-    return {"status": "cache invalidated"} if not _auth(a) else HTTPException(401)
+    if _auth(a):
+        raise HTTPException(401)
+    invalidate_cache()
+    global _t, _tf
+    _t = _tf = None
+    return {"status": "cache invalidated"}
 
 
 @app.get("/md/{f}")
-async def _gf(f, r: Request, a=Header(None)):
+async def _gf(f, a=Header(None)):
     if _auth(a) or f not in MDS:
         raise HTTPException(401 if _auth(a) else 404)
     return {"filename": f, "content": (WS / f).read_text() if (WS / f).exists() else ""}
@@ -135,17 +131,41 @@ async def chat(r: Request, a=Header(None)):
     if _auth(a):
         raise HTTPException(401, "Invalid API key")
     try:
+        if CHECK_UPSTREAM:
+            try:
+                health_resp = await http.get(f"{UP.rstrip('/')}/api/tags", timeout=5)
+                if health_resp.status_code >= 400:
+                    return JSONResponse(
+                        {"error": f"Upstream unhealthy: {health_resp.status_code}"}, 503
+                    )
+            except Exception as e:
+                return JSONResponse({"error": f"Upstream unreachable: {e}"}, 503)
+
         p = await r.json()
         if "messages" not in p:
             return JSONResponse({"error": "messages required"}, 400)
-        p["model"] = OLLAMA_MODEL if OLLAMA_MODEL else None
+
+        p["model"] = OLLAMA_MODEL or None
         b = md()
-        p["messages"] = inject(
-            p.get("messages", []), SYSTEM_PROMPT + ("\n\n" + b if b else "")
-        )
+        p["messages"] = [
+            {"role": "system", "content": SYSTEM_PROMPT + ("\n\n" + b if b else "")}
+        ] + [
+            {"role": x["role"], "content": x["content"]}
+            for x in p.get("messages", [])
+            if x.get("role") != "system"
+        ]
+
         if t := tools():
             p["tools"] = _dedupe(p.get("tools", []), t)
-        u, h = f"{UP.rstrip('/')}/v1/chat/completions", hdrs(r)
+
+        u, h = (
+            f"{UP.rstrip('/')}/v1/chat/completions",
+            {
+                "Authorization": f"Bearer {KEY}" if KEY else "",
+                "Content-Type": "application/json",
+            },
+        )
+
         if p.get("stream"):
 
             async def g():
@@ -161,6 +181,7 @@ async def chat(r: Request, a=Header(None)):
                     yield f'{{"error":"{e}"}}\n'
 
             return StreamingResponse(g(), media_type="text/event-stream")
+
         tc = 0
         while tc < MAX_TOOL_CALLS:
             x = await http.post(u, json=p, headers=h)
@@ -170,30 +191,27 @@ async def chat(r: Request, a=Header(None)):
                 R = x.json()
             except:
                 return JSONResponse({"error": "Invalid JSON from upstream"}, 502)
-            if "choices" in R:
-                m, ts = (
-                    R["choices"][0]["message"],
-                    R["choices"][0]["message"].get("tool_calls", []),
-                )
-                if not ts:
-                    return R
-                p["messages"].append(m)
-                for t_ in ts:
-                    fn, ag = t_["function"]["name"], t_["function"]["arguments"]
-                    p["messages"].append(
-                        {
-                            "role": "tool",
-                            "name": fn,
-                            "content": str(
-                                call_tool(
-                                    fn, json.loads(ag) if isinstance(ag, str) else ag
-                                )
-                            ),
-                        }
-                    )
-                tc += 1
-            else:
+            if "choices" not in R:
                 return R
+            m, ts = (
+                R["choices"][0]["message"],
+                R["choices"][0]["message"].get("tool_calls", []),
+            )
+            if not ts:
+                return R
+            p["messages"].append(m)
+            for t_ in ts:
+                fn, ag = t_["function"]["name"], t_["function"]["arguments"]
+                p["messages"].append(
+                    {
+                        "role": "tool",
+                        "name": fn,
+                        "content": str(
+                            call_tool(fn, json.loads(ag) if isinstance(ag, str) else ag)
+                        ),
+                    }
+                )
+            tc += 1
         return JSONResponse({"error": f"Max tool calls ({MAX_TOOL_CALLS})"}, 400)
     except json.JSONDecodeError:
         return JSONResponse({"error": "Invalid JSON"}, 400)

@@ -3,14 +3,11 @@ from pathlib import Path
 from typing import Optional, Callable
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
+import time
 
-OUTPUT_DIR = Path("workspace/command_outputs")
+OUTPUT_DIR = Path(__file__).parent.parent / "workspace" / "command_outputs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-MAX_OUTPUT_LINES = 2000
-MAX_PROCESSES = 1000
-TRUNCATE_EVERY = 100
-
+MAX_OUTPUT_LINES, MAX_PROCESSES, TRUNCATE_EVERY = 2000, 1000, 100
 _processes: dict[int, dict] = {}
 _loop: Optional[asyncio.AbstractEventLoop] = None
 _executor = ThreadPoolExecutor(max_workers=4)
@@ -63,13 +60,10 @@ async def run_command(
 
     output_file = OUTPUT_DIR / f"{uuid.uuid4()}.log"
     output_path = str(output_file)
-
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _write_initial, output_path, command)
 
-    env_vars = env or {}
-    full_env = {**os.environ, **env_vars}
-
+    full_env = {**os.environ, **(env or {})}
     process = await asyncio.create_subprocess_shell(
         command,
         stdout=asyncio.subprocess.PIPE,
@@ -90,7 +84,6 @@ async def run_command(
         "on_output": on_output,
         "line_count": 0,
     }
-
     _processes[process.pid] = proc_info
     _truncate_counter[output_path] = 0
 
@@ -117,11 +110,11 @@ async def run_command(
                             on_output(text)
                         except Exception:
                             pass
-
             return_code = await process.wait()
-            proc_info["return_code"] = return_code
-            proc_info["status"] = "completed" if return_code == 0 else "failed"
-
+            proc_info["return_code"], proc_info["status"] = (
+                return_code,
+                "completed" if return_code == 0 else "failed",
+            )
             if on_complete:
                 try:
                     on_complete(process.pid, return_code)
@@ -153,18 +146,15 @@ async def wait_command(process_id: int, timeout: Optional[float] = None) -> dict
     proc_info = _processes.get(process_id)
     if not proc_info:
         return {"error": f"Process {process_id} not found", "exists": False}
-
     process = proc_info["process"]
-
     try:
-        if timeout:
-            await asyncio.wait_for(process.wait(), timeout=timeout)
-        else:
-            await process.wait()
-
-        proc_info["return_code"] = process.returncode
-        proc_info["status"] = "completed" if process.returncode == 0 else "failed"
-
+        await asyncio.wait_for(
+            process.wait(), timeout=timeout
+        ) if timeout else await process.wait()
+        proc_info["return_code"], proc_info["status"] = (
+            process.returncode,
+            "completed" if process.returncode == 0 else "failed",
+        )
         return {
             "pid": process_id,
             "return_code": process.returncode,
@@ -179,15 +169,13 @@ async def kill_command(process_id: int) -> dict:
     proc_info = _processes.get(process_id)
     if not proc_info:
         return {"error": f"Process {process_id} not found", "exists": False}
-
     process = proc_info["process"]
-
     try:
-        if platform.system() == "Windows":
+        (
             process.terminate()
-        else:
-            process.send_signal(signal.SIGTERM)
-
+            if platform.system() == "Windows"
+            else process.send_signal(signal.SIGTERM)
+        )
         proc_info["status"] = "terminated"
         return {
             "pid": process_id,
@@ -202,22 +190,17 @@ def read_output(process_id: int, lines: int = 100, from_start: bool = False) -> 
     proc_info = _processes.get(process_id)
     if not proc_info:
         return {"error": f"Process {process_id} not found", "exists": False}
-
     output_file = proc_info["output_file"]
-
     if not os.path.exists(output_file):
         return {"error": "Output file not found", "output_file": output_file}
-
     try:
         with open(output_file, "r", encoding="utf-8", errors="replace") as f:
             all_lines = f.readlines()
-
         selected = (
             all_lines[:lines]
             if from_start
             else (all_lines[-lines:] if len(all_lines) > lines else all_lines)
         )
-
         return {
             "pid": process_id,
             "lines": len(selected),
@@ -230,7 +213,6 @@ def read_output(process_id: int, lines: int = 100, from_start: bool = False) -> 
 
 
 def cleanup_processes(keep_running: bool = True) -> int:
-    removed = 0
     to_remove = [
         pid
         for pid, info in _processes.items()
@@ -238,23 +220,22 @@ def cleanup_processes(keep_running: bool = True) -> int:
     ]
     for pid in to_remove:
         del _processes[pid]
-        removed += 1
+    return len(to_remove)
+
+
+def cleanup_output_files(max_age_hours: int = 24) -> int:
+    removed = 0
+    if not OUTPUT_DIR.exists():
+        return 0
+    current_time = time.time()
+    for f in OUTPUT_DIR.glob("*.log"):
+        try:
+            if (current_time - f.stat().st_mtime) / 3600 > max_age_hours:
+                f.unlink()
+                removed += 1
+        except Exception:
+            pass
     return removed
-
-
-def list_processes(status_filter: Optional[str] = None) -> dict:
-    processes = [
-        {
-            "pid": pid,
-            "command": info["command"],
-            "status": info["status"],
-            "started_at": info["started_at"],
-            "output_file": info["output_file"],
-        }
-        for pid, info in _processes.items()
-        if status_filter is None or info["status"] == status_filter
-    ]
-    return {"processes": processes, "total": len(processes)}
 
 
 def run_terminal_command(
@@ -282,19 +263,39 @@ def kill_terminal_command(process_id: int) -> dict:
 
 
 def list_terminal_commands(status_filter: Optional[str] = None) -> dict:
-    return list_processes(status_filter)
+    processes = [
+        {
+            "pid": pid,
+            "command": info["command"],
+            "status": info["status"],
+            "started_at": info["started_at"],
+            "output_file": info["output_file"],
+        }
+        for pid, info in _processes.items()
+        if status_filter is None or info["status"] == status_filter
+    ]
+    return {"processes": processes, "total": len(processes)}
 
 
-def cleanup_terminal_processes(keep_running: bool = True) -> dict:
-    removed = cleanup_processes(keep_running)
-    return {"removed": removed, "remaining": len(_processes)}
+def cleanup_terminal_processes(
+    keep_running: bool = True, cleanup_files: bool = False
+) -> dict:
+    removed_procs = cleanup_processes(keep_running)
+    removed_files = cleanup_output_files() if cleanup_files else 0
+    return {
+        "removed_processes": removed_procs,
+        "removed_files": removed_files,
+        "remaining": len(_processes),
+    }
 
 
 def get_terminal_help() -> dict:
-    help_path = Path("workspace/terminal_help.md")
-    if help_path.exists():
-        return {"usage_guide": help_path.read_text(encoding="utf-8")}
-    return {"usage_guide": "See workspace/terminal_help.md for usage guide"}
+    help_path = Path(__file__).parent.parent / "workspace" / "terminal_help.md"
+    return (
+        {"usage_guide": help_path.read_text(encoding="utf-8")}
+        if help_path.exists()
+        else {"usage_guide": "See workspace/terminal_help.md for usage guide"}
+    )
 
 
 TOOLS = [
@@ -302,7 +303,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "run_terminal_command",
-            "description": "Execute a terminal command. Supports parallel execution - call multiple times with background=true to run commands concurrently. Returns PID for tracking. Output is buffered to file (max 2000 lines). Use read_command_output with PID to read output while running or after completion.",
+            "description": "Execute a terminal command. Supports parallel execution - call multiple times with background=true to run commands concurrently. Returns PID for tracking.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -312,7 +313,7 @@ TOOLS = [
                     },
                     "background": {
                         "type": "boolean",
-                        "description": "Run in background without waiting. Use this for parallel execution - start multiple commands, then use wait_command to wait for specific ones.",
+                        "description": "Run in background without waiting.",
                         "default": False,
                     },
                     "cwd": {
@@ -332,7 +333,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "wait_terminal_command",
-            "description": "Wait for a background command to complete. Use the PID returned from run_terminal_command. Returns status, return_code, and output_file path.",
+            "description": "Wait for a background command to complete. Use the PID returned from run_terminal_command.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -342,7 +343,7 @@ TOOLS = [
                     },
                     "timeout": {
                         "type": "number",
-                        "description": "Max time to wait in seconds. Returns 'timeout' status if exceeded",
+                        "description": "Max time to wait in seconds.",
                     },
                 },
                 "required": ["process_id"],
@@ -353,22 +354,22 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "read_command_output",
-            "description": "Read output from a running or completed command. Use lines=100 (default) to get last 100 lines - works while command is still running. Use from_start=true to read from beginning. Output is buffered to workspace/command_outputs/{uuid}.log",
+            "description": "Read output from a running or completed command. Use lines=100 (default) to get last 100 lines.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "process_id": {
                         "type": "integer",
-                        "description": "The process ID (PID) from run_terminal_command",
+                        "description": "The process ID from run_terminal_command",
                     },
                     "lines": {
                         "type": "integer",
-                        "description": "Number of lines to read. Use smaller values for faster reads while command runs.",
+                        "description": "Number of lines to read.",
                         "default": 100,
                     },
                     "from_start": {
                         "type": "boolean",
-                        "description": "Read from beginning instead of tail. Useful for checking full output of short commands.",
+                        "description": "Read from beginning instead of tail.",
                         "default": False,
                     },
                 },
@@ -380,13 +381,13 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "kill_terminal_command",
-            "description": "Kill a running command process. Use when command hangs or you need to cancel it. Returns final status.",
+            "description": "Kill a running command process.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "process_id": {
                         "type": "integer",
-                        "description": "The process ID (PID) to kill",
+                        "description": "The process ID to kill",
                     }
                 },
                 "required": ["process_id"],
@@ -397,13 +398,13 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list_terminal_commands",
-            "description": "List all tracked command processes. Use status_filter to filter: 'running', 'completed', 'failed', 'terminated'. Returns PID, command, status, output_file for each.",
+            "description": "List all tracked command processes.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "status_filter": {
                         "type": "string",
-                        "description": "Filter by status: 'running', 'completed', 'failed', 'terminated'. Omit for all processes.",
+                        "description": "Filter by status: 'running', 'completed', 'failed', 'terminated'.",
                     }
                 },
                 "required": [],
@@ -414,15 +415,20 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "cleanup_terminal_processes",
-            "description": "Clean up completed/failed/terminated processes from memory. Call periodically when running many background commands to prevent memory buildup. Does not affect running processes.",
+            "description": "Clean up completed/failed/terminated processes from memory and optionally clean up old output log files.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "keep_running": {
                         "type": "boolean",
-                        "description": "If true, keeps running processes. If false, removes all including running.",
+                        "description": "If true, keeps running processes.",
                         "default": True,
-                    }
+                    },
+                    "cleanup_files": {
+                        "type": "boolean",
+                        "description": "If true, also removes output log files older than 24 hours.",
+                        "default": False,
+                    },
                 },
                 "required": [],
             },
@@ -432,7 +438,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_terminal_help",
-            "description": "Get detailed usage guide for terminal command tools. Includes parallel execution patterns, examples, and best practices.",
+            "description": "Get detailed usage guide for terminal command tools.",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },

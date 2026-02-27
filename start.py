@@ -11,10 +11,13 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from rich.console import Console
+from rich.logging import RichHandler
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
 LOGS_DIR = PROJECT_ROOT / "logs"
 PID_FILE = LOGS_DIR / "myclaw.pid"
+console = Console()
 
 
 @dataclass
@@ -49,21 +52,33 @@ def rotate_logs():
     main_log = LOGS_DIR / "myclaw.log"
     backup_log = LOGS_DIR / "myclaw.log.1"
 
-    if backup_log.exists():
-        backup_log.unlink()
+    try:
+        if backup_log.exists():
+            backup_log.unlink()
 
-    if main_log.exists():
-        main_log.rename(backup_log)
+        if main_log.exists():
+            main_log.rename(backup_log)
+    except PermissionError:
+        pass
 
 
 def setup_logging(level: str = "INFO"):
-    """Configure centralized logging."""
+    """Configure centralized logging with rich console output."""
+    log_level = getattr(logging, level.upper())
+
     logging.basicConfig(
-        level=getattr(logging, level.upper()),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        level=log_level,
+        format="%(message)s",
+        datefmt="[%X]",
         handlers=[
+            RichHandler(
+                console=console,
+                rich_tracebacks=True,
+                tracebacks_show_locals=True,
+                show_time=True,
+                show_path=False,
+            ),
             logging.FileHandler(LOGS_DIR / "myclaw.log"),
-            logging.StreamHandler(sys.stdout),
         ],
     )
 
@@ -86,13 +101,15 @@ class ProcessManager:
         env.update(spec.env)
 
         try:
+            log_file = open(LOGS_DIR / f"{spec.name}.out.log", "a")
             proc = subprocess.Popen(
                 [sys.executable, str(spec.script)],
                 env=env,
-                stdout=open(LOGS_DIR / f"{spec.name}.out.log", "a"),
+                stdout=log_file,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
+            log_file.close()
             self.processes[spec.name] = proc
             self.logger.info(f"Started {spec.name} (PID: {proc.pid})")
             return True
