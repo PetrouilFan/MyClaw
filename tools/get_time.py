@@ -1,5 +1,6 @@
 import datetime
 
-def get_time():
+
+def get_time() -> str:
     """Current UTC time."""
-    return datetime.datetime.utcnow().isoformat()
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()

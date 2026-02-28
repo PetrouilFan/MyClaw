@@ -1,0 +1,41 @@
+services:
+  myclaw:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./workspace:/app/workspace
+      - ./logs:/app/logs
+    environment:
+      - MYCLAW_UPSTREAM=http://ollama:11434
+      - MYCLAW_MODEL=${MYCLAW_MODEL:-hf.co/MaziyarPanahi/Qwen3-4B-Instruct-2507-GGUF:Q6_K}
+      - MYCLAW_API_KEY=${MYCLAW_API_KEY:-}
+      - MYCLAW_HOST=0.0.0.0
+      - MYCLAW_PORT=8080
+      - MYCLAW_CHECK_UPSTREAM=${MYCLAW_CHECK_UPSTREAM:-true}
+      - MYCLAW_MAX_TOOL_CALLS=${MYCLAW_MAX_TOOL_CALLS:-100}
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  ollama_data:

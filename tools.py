@@ -1,6 +1,5 @@
 import inspect
 from tools.get_time import get_time
-from tools.search_memories import search_memories
 from tools.read_file import read_file
 from tools.append_to_file import append_to_file
 from tools.overwrite_file import overwrite_file

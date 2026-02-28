@@ -3,8 +3,15 @@ import re
 from pathlib import Path
 
 
-def search_memories(query: str):
-    """Search MEMORIES.md for a term."""
+def search_memories(query: str) -> str:
+    """Search MEMORIES.md for a term.
+
+    Args:
+        query: Search term to look for in memories.
+
+    Returns:
+        Matching lines or error message.
+    """
     ws = Path(os.getenv("MYCLAW_WORKSPACE", Path(__file__).parent.parent / "workspace"))
     mem_file = ws / "MEMORIES.md"
     if not mem_file.exists():

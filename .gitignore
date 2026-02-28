@@ -1,6 +1,9 @@
 .venv
 __pycache__
+.env
 settings.py
 bootstrap.md
 workspace/*
 logs/
+memories.md
+user.md

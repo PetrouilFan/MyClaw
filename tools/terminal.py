@@ -1,17 +1,139 @@
-import asyncio, os, platform, uuid, signal
-from pathlib import Path
-from typing import Optional, Callable
-from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
+"""Terminal command execution tools for MyClaw."""
+
+import asyncio
+import logging
+import os
+import platform
+import re
+import signal
 import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Optional
 
 OUTPUT_DIR = Path(__file__).parent.parent / "workspace" / "command_outputs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-MAX_OUTPUT_LINES, MAX_PROCESSES, TRUNCATE_EVERY = 2000, 1000, 100
-_processes: dict[int, dict] = {}
+MAX_OUTPUT_LINES: int = 2000
+MAX_PROCESSES: int = 1000
+TRUNCATE_EVERY: int = 100
+MAX_PROCESSES = int(os.getenv("MYCLAW_MAX_PROCESSES", str(MAX_PROCESSES)))
+MAX_OUTPUT_LINES = int(os.getenv("MYCLAW_MAX_OUTPUT_LINES", str(MAX_OUTPUT_LINES)))
+
+ALLOWED_COMMANDS = (
+    os.getenv("MYCLAW_ALLOWED_COMMANDS", "").split(",")
+    if os.getenv("MYCLAW_ALLOWED_COMMANDS")
+    else [
+        "git",
+        "python",
+        "npm",
+        "node",
+        "ls",
+        "cat",
+        "grep",
+        "echo",
+        "pwd",
+        "cd",
+        "mkdir",
+        "rm",
+        "cp",
+        "mv",
+        "find",
+        "head",
+        "tail",
+        "wc",
+        "curl",
+        "wget",
+        "tar",
+        "zip",
+        "unzip",
+    ]
+)
+BLOCKED_PATTERNS = (
+    os.getenv("MYCLAW_BLOCKED_PATTERNS", "").split(",")
+    if os.getenv("MYCLAW_BLOCKED_PATTERNS")
+    else [
+        r"rm -rf /",
+        r"curl \| sh",
+        r"wget \| sh",
+        r"; rm ",
+        r"&& rm ",
+        r"|| rm ",
+        r"> /etc/passwd",
+        r"> /etc/shadow",
+        r"chmod 777",
+        r"chown -R",
+        r"mkfs",
+        r"dd if=",
+        r":\(\){:\|:&};:",
+    ]
+)
+MAX_COMMAND_DURATION = int(os.getenv("MYCLAW_MAX_COMMAND_DURATION", "60"))
+
+_processes: dict[int, dict[str, Any]] = {}
 _loop: Optional[asyncio.AbstractEventLoop] = None
 _executor = ThreadPoolExecutor(max_workers=4)
 _truncate_counter: dict[str, int] = {}
+
+terminal_logger = logging.getLogger("myclaw.terminal")
+
+
+def _log_audit(command: str, action: str, result: str = None, details: dict = None):
+    """Log terminal command execution for audit purposes."""
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "command": command,
+        "action": action,
+        "result": result,
+    }
+    if details:
+        log_entry.update(details)
+    terminal_logger.info(f"AUDIT: {log_entry}")
+
+
+def _is_command_allowed(command: str) -> tuple[bool, str]:
+    """Check if command is in the allowed list."""
+    if not ALLOWED_COMMANDS:
+        return True, ""
+
+    command_lower = command.lower().strip()
+    parts = command_lower.split()
+    if not parts:
+        return False, "Empty command"
+
+    base_cmd = parts[0]
+
+    if base_cmd not in [c.lower() for c in ALLOWED_COMMANDS]:
+        return False, f"Command '{base_cmd}' not in allowed list: {ALLOWED_COMMANDS}"
+
+    return True, ""
+
+
+def _is_pattern_blocked(command: str) -> tuple[bool, str]:
+    """Check if command matches any blocked pattern."""
+    command_lower = command.lower()
+
+    for pattern in BLOCKED_PATTERNS:
+        if re.search(pattern, command_lower, re.IGNORECASE):
+            return True, f"Command matches blocked pattern: {pattern}"
+
+    return False, ""
+
+
+def _validate_command(command: str) -> tuple[bool, str]:
+    """Validate a command for security."""
+    is_allowed, msg = _is_command_allowed(command)
+    if not is_allowed:
+        _log_audit(command, "BLOCKED_ALLOWED_LIST", "denied", {"reason": msg})
+        return False, msg
+
+    is_blocked, msg = _is_pattern_blocked(command)
+    if is_blocked:
+        _log_audit(command, "BLOCKED_PATTERN", "denied", {"reason": msg})
+        return False, msg
+
+    return True, ""
 
 
 def _get_loop() -> asyncio.AbstractEventLoop:
@@ -23,17 +145,17 @@ def _get_loop() -> asyncio.AbstractEventLoop:
     return _loop
 
 
-def _write_initial(filepath: str, command: str):
+def _write_initial(filepath: str, command: str) -> None:
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(f"[{datetime.now().isoformat()}] $ {command}\n")
 
 
-def _write_output(filepath: str, text: str):
+def _write_output(filepath: str, text: str) -> None:
     with open(filepath, "a", encoding="utf-8") as f:
         f.write(text)
 
 
-def _truncate_file_safe(filepath: str, max_lines: int = MAX_OUTPUT_LINES):
+def _truncate_file_safe(filepath: str, max_lines: int = MAX_OUTPUT_LINES) -> None:
     try:
         if not os.path.exists(filepath):
             return
@@ -55,8 +177,15 @@ async def run_command(
     on_complete: Optional[Callable[[int, int], None]] = None,
     on_output: Optional[Callable[[str], None]] = None,
 ) -> dict:
+    is_valid, error_msg = _validate_command(command)
+    if not is_valid:
+        _log_audit(command, "VALIDATION_FAILED", "denied", {"reason": error_msg})
+        return {"error": error_msg, "success": False}
+
     if len(_processes) >= MAX_PROCESSES:
         return {"error": "Max processes reached", "max": MAX_PROCESSES}
+
+    effective_timeout = timeout or MAX_COMMAND_DURATION
 
     output_file = OUTPUT_DIR / f"{uuid.uuid4()}.log"
     output_path = str(output_file)
@@ -100,30 +229,38 @@ async def run_command(
                     text = line.decode("utf-8", errors="replace")
                     await loop.run_in_executor(None, _write_output, output_path, text)
                     proc_info["line_count"] += 1
-                    _truncate_counter[output_path] = (
-                        _truncate_counter.get(output_path, 0) + 1
-                    )
+                    _truncate_counter[output_path] = _truncate_counter.get(output_path, 0) + 1
                     if _truncate_counter[output_path] >= TRUNCATE_EVERY:
-                        await loop.run_in_executor(
-                            None, _truncate_file_safe, output_path
-                        )
+                        await loop.run_in_executor(None, _truncate_file_safe, output_path)
                         _truncate_counter[output_path] = 0
                     if on_output:
                         try:
                             on_output(text)
                         except Exception:
                             pass
-            return_code = await process.wait()
+            try:
+                return_code = await asyncio.wait_for(process.wait(), timeout=effective_timeout)
+            except asyncio.TimeoutError:
+                _log_audit(command, "TIMEOUT", "killed", {"timeout": effective_timeout})
+                process.kill()
+                return_code = -1
             proc_info["return_code"], proc_info["status"] = (
                 return_code,
                 "completed" if return_code == 0 else "failed",
+            )
+            _log_audit(
+                command,
+                "EXECUTED",
+                proc_info["status"],
+                {"return_code": return_code, "pid": process.pid},
             )
             if on_complete:
                 try:
                     on_complete(process.pid, return_code)
                 except Exception:
                     pass
-        except Exception:
+        except Exception as e:
+            _log_audit(command, "ERROR", "failed", {"error": str(e)})
             proc_info["status"] = "failed"
 
     if background:
@@ -151,9 +288,7 @@ async def wait_command(process_id: int, timeout: Optional[float] = None) -> dict
         return {"error": f"Process {process_id} not found", "exists": False}
     process = proc_info["process"]
     try:
-        await asyncio.wait_for(
-            process.wait(), timeout=timeout
-        ) if timeout else await process.wait()
+        await asyncio.wait_for(process.wait(), timeout=timeout) if timeout else await process.wait()
         proc_info["return_code"], proc_info["status"] = (
             process.returncode,
             "completed" if process.returncode == 0 else "failed",
@@ -217,9 +352,7 @@ def read_output(process_id: int, lines: int = 100, from_start: bool = False) -> 
 
 def cleanup_processes(keep_running: bool = True) -> int:
     to_remove = [
-        pid
-        for pid, info in _processes.items()
-        if info["status"] != "running" or not keep_running
+        pid for pid, info in _processes.items() if info["status"] != "running" or not keep_running
     ]
     for pid in to_remove:
         del _processes[pid]
@@ -248,13 +381,34 @@ def run_terminal_command(
     env: Optional[dict] = None,
     timeout: Optional[float] = None,
 ) -> dict:
-    import threading
+    """Execute a terminal command (sync wrapper).
 
-    result = {}
+    Use async_run_command() for async contexts.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        import threading
 
-    def run():
-        nonlocal result
-        result = _get_loop().run_until_complete(
+        result: dict = {}
+
+        def run():
+            nonlocal result
+            result = _get_loop().run_until_complete(
+                run_command(
+                    command=command,
+                    background=background,
+                    cwd=cwd,
+                    env=env,
+                    timeout=timeout,
+                )
+            )
+
+        t = threading.Thread(target=run)
+        t.start()
+        t.join()
+        return result
+    except RuntimeError:
+        return _get_loop().run_until_complete(
             run_command(
                 command=command,
                 background=background,
@@ -264,42 +418,74 @@ def run_terminal_command(
             )
         )
 
-    t = threading.Thread(target=run)
-    t.start()
-    t.join()
-    return result
+
+async def async_run_command(
+    command: str,
+    background: bool = False,
+    cwd: Optional[str] = None,
+    env: Optional[dict] = None,
+    timeout: Optional[float] = None,
+) -> dict:
+    """Execute a terminal command asynchronously."""
+    return await run_command(
+        command=command,
+        background=background,
+        cwd=cwd,
+        env=env,
+        timeout=timeout,
+    )
 
 
 def wait_terminal_command(process_id: int, timeout: Optional[float] = None) -> dict:
-    import threading
+    """Wait for a background command (sync wrapper)."""
+    try:
+        loop = asyncio.get_running_loop()
+        import threading
 
-    result = {}
+        result: dict = {}
 
-    def run():
-        nonlocal result
-        result = _get_loop().run_until_complete(
-            wait_command(process_id=process_id, timeout=timeout)
-        )
+        def run():
+            nonlocal result
+            result = _get_loop().run_until_complete(
+                wait_command(process_id=process_id, timeout=timeout)
+            )
 
-    t = threading.Thread(target=run)
-    t.start()
-    t.join()
-    return result
+        t = threading.Thread(target=run)
+        t.start()
+        t.join()
+        return result
+    except RuntimeError:
+        return _get_loop().run_until_complete(wait_command(process_id=process_id, timeout=timeout))
+
+
+async def async_wait_command(process_id: int, timeout: Optional[float] = None) -> dict:
+    """Wait for a background command asynchronously."""
+    return await wait_command(process_id=process_id, timeout=timeout)
 
 
 def kill_terminal_command(process_id: int) -> dict:
-    import threading
+    """Kill a running command (sync wrapper)."""
+    try:
+        loop = asyncio.get_running_loop()
+        import threading
 
-    result = {}
+        result: dict = {}
 
-    def run():
-        nonlocal result
-        result = _get_loop().run_until_complete(kill_command(process_id=process_id))
+        def run():
+            nonlocal result
+            result = _get_loop().run_until_complete(kill_command(process_id=process_id))
 
-    t = threading.Thread(target=run)
-    t.start()
-    t.join()
-    return result
+        t = threading.Thread(target=run)
+        t.start()
+        t.join()
+        return result
+    except RuntimeError:
+        return _get_loop().run_until_complete(kill_command(process_id=process_id))
+
+
+async def async_kill_command(process_id: int) -> dict:
+    """Kill a running command asynchronously."""
+    return await kill_command(process_id=process_id)
 
 
 def list_terminal_commands(status_filter: Optional[str] = None) -> dict:
@@ -317,9 +503,7 @@ def list_terminal_commands(status_filter: Optional[str] = None) -> dict:
     return {"processes": processes, "total": len(processes)}
 
 
-def cleanup_terminal_processes(
-    keep_running: bool = True, cleanup_files: bool = False
-) -> dict:
+def cleanup_terminal_processes(keep_running: bool = True, cleanup_files: bool = False) -> dict:
     removed_procs = cleanup_processes(keep_running)
     removed_files = cleanup_output_files() if cleanup_files else 0
     return {

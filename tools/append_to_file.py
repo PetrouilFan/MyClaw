@@ -1,11 +1,23 @@
 import os
 from pathlib import Path
+from typing import Optional
+
 from tools._utils import _is_safe_path
 
 WS = Path(os.getenv("MYCLAW_WORKSPACE", Path(__file__).parent.parent / "workspace"))
 
 
-def append_to_file(filepath: str, content: str, base_dir: str = None):
+def append_to_file(filepath: str, content: str, base_dir: Optional[str] = None) -> str:
+    """Append content to a file.
+
+    Args:
+        filepath: Path to the file to append to.
+        content: Content to append.
+        base_dir: Base directory for resolving relative paths.
+
+    Returns:
+        Success or error message.
+    """
     base = Path(base_dir) if base_dir else WS
     p = (base / filepath).resolve()
     if not _is_safe_path(p, base):

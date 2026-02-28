@@ -1,5 +1,3 @@
-import os
-from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.containers import ScrollableContainer, Horizontal
 from textual.widgets import Header, Footer, Input, Static, Markdown
