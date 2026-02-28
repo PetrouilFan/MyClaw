@@ -72,10 +72,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run Bandit security scan
-        uses: Bandit[bot]@latest
+        uses: PythonCoderAS/gh-bandit@latest
         with:
-          scan: .
-          level: medium
+          args: "."
 
       - name: Run safety check
         uses: pyupio/safety@2.0
