@@ -161,5 +161,71 @@ class MyClawSettings(BaseSettings):
         description="Allowed API keys for authentication (comma-separated)",
     )
 
+    session_enabled: bool = Field(
+        default=True,
+        description="Enable session-based conversation history",
+    )
+
+    session_storage_path: Optional[Path] = Field(
+        default=None,
+        description="Path to store session files (default: workspace/sessions)",
+    )
+
+    session_token_budget: int = Field(
+        default=28000,
+        ge=1000,
+        description="Maximum tokens for conversation history",
+    )
+
+    session_ttl_days: Optional[int] = Field(
+        default=None,
+        description="Session expiration in days (None = no expiration)",
+    )
+
+    stateless_mode: bool = Field(
+        default=False,
+        description="Disable session history (for subagents/isolated tasks)",
+    )
+
+    max_memories: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Maximum memories to inject per request",
+    )
+
+    enable_selective_memory: bool = Field(
+        default=True,
+        description="Enable selective memory injection based on query",
+    )
+
+    enable_dynamic_tools: bool = Field(
+        default=False,
+        description="Enable dynamic tool selection based on context",
+    )
+
+    max_tools: int = Field(
+        default=10,
+        ge=1,
+        description="Maximum tools to include in request",
+    )
+
+    enable_planning: bool = Field(
+        default=True,
+        description="Enable planning step before tool execution",
+    )
+
+    enable_reflection: bool = Field(
+        default=True,
+        description="Enable reflection after tool execution",
+    )
+
+    tool_max_retries: int = Field(
+        default=2,
+        ge=0,
+        le=5,
+        description="Maximum retries for failed tool calls",
+    )
+
 
 settings = MyClawSettings()

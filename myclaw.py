@@ -28,6 +28,24 @@ from settings import (
     SYSTEM_PROMPT,
     WS,
     ALLOWED_API_KEYS,
+    SESSION_ENABLED,
+    SESSION_STORAGE_PATH,
+    SESSION_TOKEN_BUDGET,
+    STATELESS_MODE,
+    ENABLE_SELECTIVE_MEMORY,
+    ENABLE_DYNAMIC_TOOLS,
+    MAX_TOOLS,
+    ENABLE_PLANNING,
+    ENABLE_REFLECTION,
+    TOOL_MAX_RETRIES,
+)
+
+from session_manager import get_session_manager
+from context_builder import get_context_builder
+from agent_loop import (
+    add_planning_to_system_prompt,
+    get_planning_agent,
+    ErrorFormatter,
 )
 
 limiter = Limiter(key_func=get_remote_address)
@@ -206,7 +224,49 @@ def _h():
         "workspace": str(WS),
         "version": "0.1.0",
         "tools_loaded": len(tools()) if tools() else 0,
+        "session_enabled": SESSION_ENABLED,
+        "stateless_mode": STATELESS_MODE,
     }
+
+
+@app.get("/sessions")
+async def _list_sessions(a=Header(None)):
+    if _auth(a):
+        raise HTTPException(401, "Invalid API key")
+    if not SESSION_ENABLED or STATELESS_MODE:
+        raise HTTPException(404, "Session management not available")
+
+    sm = get_session_manager(storage_dir=SESSION_STORAGE_PATH, token_budget=SESSION_TOKEN_BUDGET)
+    sessions = []
+    for path in sm.storage_dir.glob("*.json"):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            sessions.append(
+                {
+                    "session_id": data.get("session_id"),
+                    "updated_at": data.get("updated_at"),
+                    "message_count": len(data.get("messages", [])),
+                }
+            )
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {"sessions": sessions, "total": len(sessions)}
+
+
+@app.delete("/sessions/{session_id}")
+async def _delete_session(session_id, a=Header(None)):
+    if _auth(a):
+        raise HTTPException(401, "Invalid API key")
+    if not SESSION_ENABLED or STATELESS_MODE:
+        raise HTTPException(404, "Session management not available")
+
+    sm = get_session_manager(storage_dir=SESSION_STORAGE_PATH, token_budget=SESSION_TOKEN_BUDGET)
+    path = sm._get_session_path(session_id)
+    if path.exists():
+        path.unlink()
+        return {"status": "deleted", "session_id": session_id}
+    raise HTTPException(404, "Session not found")
 
 
 @app.get("/metrics")
@@ -299,7 +359,7 @@ async def _pf(f, r: Request, a=Header(None)):
 
 @app.post("/v1/chat/completions")
 @limiter.limit("60/minute")
-async def chat(r: Request, a=Header(None)):
+async def chat(request: Request, a=Header(None)):
     if _auth(a):
         raise HTTPException(401, "Invalid API key")
     try:
@@ -317,27 +377,88 @@ async def chat(r: Request, a=Header(None)):
                 return _create_error_response("Upstream unreachable", 503, {"error": str(e)})
 
         try:
-            p = await r.json()
+            p = await request.json()
         except json.JSONDecodeError as e:
             return _create_error_response("Invalid JSON in request", 400, {"error": str(e)})
 
         if "messages" not in p:
             return _create_error_response("messages required", 400)
 
+        session_id = None
+        session_history = []
+
+        if SESSION_ENABLED and not STATELESS_MODE:
+            session_id = request.headers.get("X-Session-ID")
+            if not session_id:
+                client_ip = request.client.host if request.client else ""
+                user_agent = request.headers.get("user-agent", "")
+                sm = get_session_manager(
+                    storage_dir=SESSION_STORAGE_PATH,
+                    token_budget=SESSION_TOKEN_BUDGET,
+                )
+                session_id = sm.generate_session_id(ip=client_ip, user_agent=user_agent)
+
+            sm = get_session_manager(
+                storage_dir=SESSION_STORAGE_PATH,
+                token_budget=SESSION_TOKEN_BUDGET,
+            )
+            session_history = sm.load_session(session_id)
+
         log.info("chat_request", model=OLLAMA_MODEL, messages_count=len(p.get("messages", [])))
 
         p["model"] = OLLAMA_MODEL or None
-        b = md()
-        p["messages"] = [
-            {"role": "system", "content": SYSTEM_PROMPT + ("\n\n" + b if b else "")}
-        ] + [
+
+        incoming_messages = [
             {"role": x["role"], "content": x["content"]}
             for x in p.get("messages", [])
             if x.get("role") != "system"
         ]
 
-        if t := tools():
-            p["tools"] = _dedupe(p.get("tools", []), t)
+        user_message = ""
+        if incoming_messages:
+            last_msg = incoming_messages[-1]
+            user_message = last_msg.get("content", "")
+
+        cb = get_context_builder(workspace=WS)
+
+        system_content = cb.build_system_prompt(
+            base_prompt=SYSTEM_PROMPT,
+            include_identity=True,
+            include_personality=True,
+            include_user=True,
+            include_memories=ENABLE_SELECTIVE_MEMORY,
+            query=user_message,
+        )
+
+        if session_history:
+            available = SESSION_TOKEN_BUDGET - 2000
+            from token_budget import estimate_tokens, truncate_messages
+
+            reserved = estimate_tokens(system_content)
+            available_for_history = max(0, available - reserved)
+
+            truncated_history = truncate_messages(session_history, available_for_history)
+
+            p["messages"] = (
+                [{"role": "system", "content": system_content}]
+                + truncated_history
+                + incoming_messages
+            )
+        else:
+            p["messages"] = [{"role": "system", "content": system_content}] + incoming_messages
+
+        all_tools = tools()
+        if all_tools:
+            if ENABLE_DYNAMIC_TOOLS:
+                selected_tools = cb.select_tools(
+                    all_tools=all_tools,
+                    query=user_message,
+                    conversation_history=session_history,
+                    max_tools=MAX_TOOLS,
+                )
+                p["tools"] = _dedupe(p.get("tools", []), selected_tools)
+            else:
+                p["tools"] = _dedupe(p.get("tools", []), all_tools)
 
         u, h = (
             f"{UP.rstrip('/')}/v1/chat/completions",
@@ -364,6 +485,16 @@ async def chat(r: Request, a=Header(None)):
 
             return StreamingResponse(g(), media_type="text/event-stream")
 
+        planning_agent = get_planning_agent(
+            enable_planning=ENABLE_PLANNING,
+            enable_reflection=ENABLE_REFLECTION,
+        )
+        error_formatter = ErrorFormatter()
+
+        if ENABLE_PLANNING:
+            system_msg = p["messages"][0]
+            system_msg["content"] = add_planning_to_system_prompt(system_msg.get("content", ""))
+
         tc = 0
         while tc < MAX_TOOL_CALLS:
             x = await http.post(u, json=p, headers=h)
@@ -374,7 +505,7 @@ async def chat(r: Request, a=Header(None)):
                 )
             try:
                 R = x.json()
-            except:
+            except Exception:
                 return _create_error_response("Invalid JSON from upstream", 502)
             if "choices" not in R:
                 return R
@@ -385,20 +516,69 @@ async def chat(r: Request, a=Header(None)):
                 content = clean_content(m)
                 R["choices"][0]["message"]["content"] = content
                 log.info("chat_response", tool_calls=0)
+
+                if SESSION_ENABLED and not STATELESS_MODE and session_id:
+                    sm = get_session_manager(
+                        storage_dir=SESSION_STORAGE_PATH,
+                        token_budget=SESSION_TOKEN_BUDGET,
+                    )
+                    for msg in p["messages"]:
+                        if msg.get("role") not in ("system",):
+                            session_history.append(msg)
+                    session_history.append({"role": "assistant", "content": content})
+                    sm.save_session(session_id, session_history)
+
                 return R
             p["messages"].append(m)
             for t_ in ts:
                 fn, ag = t_["function"]["name"], t_["function"]["arguments"]
+                args = json.loads(ag) if isinstance(ag, str) else ag
+
+                tool_result = None
+                error_msg = None
+
+                for attempt in range(TOOL_MAX_RETRIES + 1):
+                    try:
+                        tool_result = call_tool(fn, args)
+
+                        if isinstance(tool_result, dict) and tool_result.get("error"):
+                            error_msg = tool_result.get("error", "Unknown error")
+                            if attempt < TOOL_MAX_RETRIES:
+                                log.warning("tool_retry", tool=fn, attempt=attempt, error=error_msg)
+                                formatted_error = error_formatter.format_tool_error(
+                                    fn, error_msg, args
+                                )
+                                p["messages"].append(
+                                    {"role": "tool", "name": fn, "content": formatted_error}
+                                )
+                                continue
+                        else:
+                            break
+                    except Exception as e:
+                        error_msg = str(e)
+                        if attempt < TOOL_MAX_RETRIES:
+                            log.warning(
+                                "tool_error_retry", tool=fn, attempt=attempt, error=error_msg
+                            )
+                            formatted_error = error_formatter.format_tool_error(fn, error_msg, args)
+                            p["messages"].append(
+                                {"role": "tool", "name": fn, "content": formatted_error}
+                            )
+                            continue
+                        tool_result = {"error": error_msg, "success": False}
+                        break
+
+                result_str = str(tool_result) if tool_result else ""
+
+                if ENABLE_REFLECTION and planning_agent.should_reflect(result_str):
+                    reflection = planning_agent.create_reflection(fn, args, result_str)
+                    p["messages"].append({"role": "user", "content": reflection})
+
                 log.info("tool_call", tool=fn, arguments=ag)
-                p["messages"].append(
-                    {
-                        "role": "tool",
-                        "name": fn,
-                        "content": str(
-                            call_tool(fn, json.loads(ag) if isinstance(ag, str) else ag)
-                        ),
-                    }
-                )
+                p["messages"].append({"role": "tool", "name": fn, "content": result_str})
+                if SESSION_ENABLED and not STATELESS_MODE and session_id:
+                    session_history.append(m)
+                    session_history.append({"role": "tool", "name": fn, "content": result_str})
             tc += 1
         log.warning("max_tool_calls_reached", max_calls=MAX_TOOL_CALLS)
         return _create_error_response(
