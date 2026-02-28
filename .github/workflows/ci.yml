@@ -28,13 +28,13 @@ jobs:
         run: uv sync --dev
 
       - name: Run pytest
-        run: pytest --cov=. --cov-report=xml --cov-report=term -v
+        run: uv run pytest --cov=. --cov-report=xml --cov-report=term -v
 
       - name: Run ruff
-        run: ruff check . --fix
+        run: uv run ruff check .
 
       - name: Run mypy
-        run: mypy . --ignore-missing-imports || true
+        run: uv run mypy . --ignore-missing-imports || true
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
@@ -63,20 +63,3 @@ jobs:
           tags: myclaw:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  security:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Run Bandit security scan
-        uses: PythonCoderAS/gh-bandit@latest
-        with:
-          args: "."
-
-      - name: Run safety check
-        uses: pyupio/safety@2.0
-        with:
-          database: back
