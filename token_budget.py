@@ -1,10 +1,28 @@
 """Token counting utilities for MyClaw.
 
-Provides rough token estimation and optional tiktoken-based counting.
+Provides rough token estimation and tiktoken-based counting.
 """
 
 import json
 import re
+from typing import Optional
+
+_tiktoken_encoder: Optional[object] = None
+
+
+def _get_tiktoken_encoder() -> Optional[object]:
+    """Get or initialize tiktoken encoder."""
+    global _tiktoken_encoder
+
+    if _tiktoken_encoder is None:
+        try:
+            import tiktoken
+
+            _tiktoken_encoder = tiktoken.get_encoding("cl100k_base")
+        except ImportError:
+            pass
+
+    return _tiktoken_encoder
 
 
 def estimate_tokens(text: str) -> int:
@@ -28,17 +46,48 @@ def estimate_tokens(text: str) -> int:
 
 
 def estimate_tokens_precise(text: str) -> int:
-    """Try to use tiktoken for precise counting, fall back to estimate.
+    """Use tiktoken for precise counting, fall back to estimate.
 
     Requires: pip install tiktoken
     """
-    try:
-        import tiktoken
-
-        enc = tiktoken.get_encoding("cl100k_base")
+    enc = _get_tiktoken_encoder()
+    if enc is not None:
         return len(enc.encode(text))
-    except ImportError:
-        return estimate_tokens(text)
+    return estimate_tokens(text)
+
+
+def get_tokenizer_for_model(model: str):
+    """Get appropriate tokenizer for a specific model.
+
+    Args:
+        model: Model name (e.g., 'gpt-4', 'qwen', 'llama')
+
+    Returns:
+        Tokenizer function
+    """
+    enc = _get_tiktoken_encoder()
+
+    if enc is not None:
+        model_lower = model.lower()
+
+        if "qwen" in model_lower:
+            try:
+                return tiktoken.get_encoding("cl100k_base")
+            except ImportError:
+                pass
+
+        if "gpt" in model_lower:
+            if "4" in model_lower:
+                return tiktoken.get_encoding("cl100k_base")
+            return tiktoken.get_encoding("p50k_base")
+
+        if "llama" in model_lower or "mistral" in model_lower:
+            try:
+                return tiktoken.get_encoding("cc100")
+            except ImportError:
+                pass
+
+    return estimate_tokens
 
 
 def count_messages_tokens(messages: list[dict]) -> int:

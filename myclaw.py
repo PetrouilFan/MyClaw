@@ -4,6 +4,7 @@
 import asyncio
 import json
 import os
+import time
 from pathlib import Path
 
 import httpx
@@ -231,6 +232,13 @@ def call_tool(n, a):
     if _tf is None:
         tools()
     if _tf and n in _tf:
+        try:
+            from tools.tool_validator import validate_tool_call
+
+            validate_tool_call(n, a)
+        except Exception as e:
+            log.error("tool_validation_error", tool=n, error=str(e))
+            return {"error": f"Validation failed: {str(e)}", "success": False, "tool": n}
         try:
             return _tf[n](**a)
         except Exception as e:
@@ -555,6 +563,41 @@ async def _pf(f, r: Request, a=Header(None)):
 async def chat(request: Request, a=Header(None)):
     if _auth(a):
         raise HTTPException(401, "Invalid API key")
+
+    client_ip = request.client.host if request.client else "unknown"
+    session_id = request.headers.get("X-Session-ID")
+
+    from rate_limiter import get_rate_limiter
+
+    rl = get_rate_limiter(requests_per_minute=RATE_LIMIT_PER_MINUTE)
+
+    ip_allowed, ip_info = rl.check_ip(client_ip)
+    if not ip_allowed:
+        raise HTTPException(
+            429,
+            "Rate limit exceeded",
+            headers={
+                "X-RateLimit-Limit": str(ip_info.limit),
+                "X-RateLimit-Remaining": str(ip_info.remaining),
+                "X-RateLimit-Reset": str(ip_info.reset),
+                "Retry-After": str(ip_info.reset - int(time.time())),
+            },
+        )
+
+    if session_id:
+        session_allowed, session_info = rl.check_session(session_id)
+        if not session_allowed:
+            raise HTTPException(
+                429,
+                "Session rate limit exceeded",
+                headers={
+                    "X-RateLimit-Session-Limit": str(session_info.limit),
+                    "X-RateLimit-Session-Remaining": str(session_info.remaining),
+                    "X-RateLimit-Session-Reset": str(session_info.reset),
+                    "Retry-After": str(session_info.reset - int(time.time())),
+                },
+            )
+
     try:
         if CHECK_UPSTREAM:
             try:
@@ -580,7 +623,13 @@ async def chat(request: Request, a=Header(None)):
         session_id = None
         session_history = []
 
-        if SESSION_ENABLED and not STATELESS_MODE:
+        agent_mode = request.headers.get("X-Agent-Mode", "").lower()
+        stateless_mode = agent_mode == "stateless" or STATELESS_MODE
+
+        if agent_mode == "stateless":
+            log.info("stateless_mode_enabled", via="header")
+
+        if SESSION_ENABLED and not stateless_mode:
             session_id = request.headers.get("X-Session-ID")
             if not session_id:
                 client_ip = request.client.host if request.client else ""
@@ -710,7 +759,7 @@ async def chat(request: Request, a=Header(None)):
                 R["choices"][0]["message"]["content"] = content
                 log.info("chat_response", tool_calls=0)
 
-                if SESSION_ENABLED and not STATELESS_MODE and session_id:
+                if SESSION_ENABLED and not stateless_mode and session_id:
                     sm = get_session_manager(
                         storage_dir=SESSION_STORAGE_PATH,
                         token_budget=SESSION_TOKEN_BUDGET,

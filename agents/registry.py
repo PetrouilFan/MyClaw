@@ -3,6 +3,7 @@
 import json
 import logging
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -51,6 +52,75 @@ class AgentRegistry:
         agent_file = self.storage_dir / f"{agent.id}.json"
         with open(agent_file, "w", encoding="utf-8") as f:
             json.dump(agent.model_dump(mode="json"), f, indent=2, default=str)
+
+    def _get_conversation_path(self, agent_id: str) -> Path:
+        """Get the conversation history file path for an agent."""
+        agent_dir = self.storage_dir / agent_id
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        return agent_dir / "conversation.json"
+
+    def save_conversation(self, agent_id: str, messages: List[dict]) -> None:
+        """Save agent conversation history to disk."""
+        conversation_path = self._get_conversation_path(agent_id)
+        data = {
+            "agent_id": agent_id,
+            "updated_at": datetime.now().isoformat(),
+            "messages": messages,
+        }
+        with open(conversation_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, default=str)
+
+    def load_conversation(self, agent_id: str) -> List[dict]:
+        """Load agent conversation history from disk."""
+        conversation_path = self._get_conversation_path(agent_id)
+        if not conversation_path.exists():
+            return []
+
+        try:
+            with open(conversation_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data.get("messages", [])
+        except (json.JSONDecodeError, IOError):
+            return []
+
+    def append_to_conversation(self, agent_id: str, role: str, content: str) -> None:
+        """Append a message to the agent's conversation history."""
+        conversation_path = self._get_conversation_path(agent_id)
+        messages = self.load_conversation(agent_id)
+        messages.append(
+            {
+                "role": role,
+                "content": content,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+        self.save_conversation(agent_id, messages)
+
+    def get_agent_audit_trail(self, agent_id: str) -> List[dict]:
+        """Get the audit trail for an agent (all decisions and events)."""
+        audit_path = self._get_conversation_path(agent_id).parent / "audit.json"
+        if not audit_path.exists():
+            return []
+
+        try:
+            with open(audit_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return []
+
+    def add_audit_entry(self, agent_id: str, event_type: str, details: dict) -> None:
+        """Add an entry to the agent's audit trail."""
+        audit_path = self._get_conversation_path(agent_id).parent / "audit.json"
+        audit = self.get_agent_audit_trail(agent_id)
+        audit.append(
+            {
+                "timestamp": datetime.now().isoformat(),
+                "event_type": event_type,
+                "details": details,
+            }
+        )
+        with open(audit_path, "w", encoding="utf-8") as f:
+            json.dump(audit, f, indent=2)
 
     def _delete_agent_file(self, agent_id: str) -> None:
         """Delete agent file from disk."""
@@ -143,6 +213,17 @@ class AgentRegistry:
                 self._save_agent(parent)
 
             self._save_agent(agent)
+            self.save_conversation(agent_id, [])
+            self.add_audit_entry(
+                agent_id,
+                "agent_spawned",
+                {
+                    "name": name,
+                    "parent_id": parent_id,
+                    "depth": depth,
+                    "metadata": metadata or {},
+                },
+            )
             logger.info("agent_created", agent_id=agent_id, name=name, parent_id=parent_id)
 
             return agent
