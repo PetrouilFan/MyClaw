@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """myclaw — minimal OpenClaw-like LLM middleware."""
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -38,6 +39,10 @@ from settings import (
     ENABLE_PLANNING,
     ENABLE_REFLECTION,
     TOOL_MAX_RETRIES,
+    ENABLE_AGENT_TOOLS,
+    SUBAGENT_MAX_AGENTS,
+    SUBAGENT_MAX_DEPTH,
+    SUBAGENT_TIMEOUT,
 )
 
 from session_manager import get_session_manager
@@ -47,6 +52,17 @@ from agent_loop import (
     get_planning_agent,
     ErrorFormatter,
 )
+
+try:
+    from agents.tools import TOOLS as AGENT_TOOLS, TOOL_FUNCTIONS as AGENT_TOOL_FUNCTIONS
+    from agents.manager import get_agent_manager
+    from agents.events import get_event_manager
+
+    AGENT_TOOLS_AVAILABLE = True
+except ImportError:
+    AGENT_TOOLS_AVAILABLE = False
+    AGENT_TOOLS = []
+    AGENT_TOOL_FUNCTIONS = {}
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -185,9 +201,29 @@ def tools():
     global _t, _tf
     if _t is None:
         _t, _tf = load_tools(project_root=Path(__file__).parent, workspace=WS)
+
+        if ENABLE_AGENT_TOOLS and AGENT_TOOLS_AVAILABLE:
+            existing_names = {t.get("function", {}).get("name", "") for t in (_t or [])}
+            for tool in AGENT_TOOLS:
+                tool_name = tool.get("function", {}).get("name", "")
+                if tool_name and tool_name not in existing_names:
+                    _t = (_t or []) + [tool]
+
+            for name, func in AGENT_TOOL_FUNCTIONS.items():
+                if name not in (_tf or {}):
+                    _tf = _tf or {}
+                    _tf[name] = func
+
         if _t:
             metrics.tools_loaded.set(len(_t))
     return _t
+
+
+def tool_functions():
+    global _tf
+    if _tf is None:
+        tools()
+    return _tf
 
 
 def call_tool(n, a):
@@ -269,7 +305,164 @@ async def _delete_session(session_id, a=Header(None)):
     raise HTTPException(404, "Session not found")
 
 
-@app.get("/metrics")
+@app.get("/agents")
+async def _list_agents(a=Header(None)):
+    """List all agents."""
+    if _auth(a):
+        raise HTTPException(401, "Invalid API key")
+
+    if not AGENT_TOOLS_AVAILABLE:
+        raise HTTPException(404, "Agent system not available")
+
+    from agents.registry import get_agent_registry
+    from agents.models import AgentStatus
+
+    registry = get_agent_registry(
+        workspace=WS,
+        max_agents=SUBAGENT_MAX_AGENTS,
+        max_depth=SUBAGENT_MAX_DEPTH,
+    )
+
+    parent_id = None
+    status = None
+
+    agents = registry.list_agents(parent_id=parent_id)
+    return {
+        "agents": [a.to_summary() for a in agents],
+        "total": len(agents),
+    }
+
+
+@app.get("/agents/{agent_id}")
+async def _get_agent(agent_id: str, a=Header(None)):
+    """Get agent status."""
+    if _auth(a):
+        raise HTTPException(401, "Invalid API key")
+
+    if not AGENT_TOOLS_AVAILABLE:
+        raise HTTPException(404, "Agent system not available")
+
+    manager = await get_agent_manager()
+    status = manager.get_agent_status(agent_id)
+
+    if status is None:
+        raise HTTPException(404, f"Agent '{agent_id}' not found")
+
+    return status
+
+
+@app.delete("/agents/{agent_id}")
+async def _terminate_agent(agent_id: str, a=Header(None)):
+    """Terminate an agent."""
+    if _auth(a):
+        raise HTTPException(401, "Invalid API key")
+
+    if not AGENT_TOOLS_AVAILABLE:
+        raise HTTPException(404, "Agent system not available")
+
+    manager = await get_agent_manager()
+    result = await manager.terminate_agent(agent_id)
+
+    if not result:
+        raise HTTPException(404, f"Agent '{agent_id}' not found")
+
+    return {"status": "terminated", "agent_id": agent_id}
+
+
+@app.post("/agents/{parent_id}/spawn")
+async def _spawn_agent(parent_id: str, request: Request, a=Header(None)):
+    """Spawn a subagent."""
+    if _auth(a):
+        raise HTTPException(401, "Invalid API key")
+
+    if not AGENT_TOOLS_AVAILABLE:
+        raise HTTPException(404, "Agent system not available")
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return _create_error_response("Invalid JSON", 400)
+
+    name = body.get("name", f"agent-{body.get('task', '')[:20]}")
+    task = body.get("task", "")
+
+    if not task:
+        return _create_error_response("task is required", 400)
+
+    try:
+        manager = await get_agent_manager()
+        agent = await manager.spawn_agent(
+            name=name,
+            parent_id=parent_id,
+            task=task,
+            metadata=body.get("metadata", {}),
+        )
+        return {
+            "agent_id": agent.id,
+            "name": agent.name,
+            "status": agent.status.value,
+            "message": f"Agent '{name}' spawned successfully",
+        }
+    except ValueError as e:
+        return _create_error_response(str(e), 400)
+    except Exception as e:
+        log.error("spawn_agent_error", error=str(e))
+        return _create_error_response(str(e), 500)
+
+
+@app.get("/agents/{agent_id}/messages")
+async def _get_agent_messages(agent_id: str, a=Header(None)):
+    """Get messages for an agent."""
+    if _auth(a):
+        raise HTTPException(401, "Invalid API key")
+
+    if not AGENT_TOOLS_AVAILABLE:
+        raise HTTPException(404, "Agent system not available")
+
+    manager = await get_agent_manager()
+    messages = manager.get_messages(agent_id)
+
+    return {
+        "messages": [
+            {
+                "id": m.id,
+                "from": m.from_agent_id,
+                "to": m.to_agent_id,
+                "content": m.content,
+                "timestamp": m.timestamp.isoformat(),
+            }
+            for m in messages
+        ],
+        "count": len(messages),
+    }
+
+
+@app.get("/agents/{agent_id}/events")
+async def _agent_events(agent_id: str):
+    """Server-Sent Events for agent updates."""
+    if not AGENT_TOOLS_AVAILABLE:
+        raise HTTPException(404, "Agent system not available")
+
+    event_manager = get_event_manager()
+
+    async def event_generator():
+        try:
+            async for event in event_manager.event_stream(agent_id):
+                yield event
+        except asyncio.CancelledError:
+            pass
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 def _metrics():
     from starlette.responses import Response
     from prometheus_client import generate_latest, CONTENT_TYPE_LATEST

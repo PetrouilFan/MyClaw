@@ -227,5 +227,29 @@ class MyClawSettings(BaseSettings):
         description="Maximum retries for failed tool calls",
     )
 
+    subagent_max_agents: int = Field(
+        default=10,
+        ge=1,
+        description="Maximum concurrent subagents",
+    )
+
+    subagent_max_depth: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Maximum agent spawn depth",
+    )
+
+    subagent_timeout: int = Field(
+        default=300,
+        ge=10,
+        description="Subagent max runtime in seconds",
+    )
+
+    enable_agent_tools: bool = Field(
+        default=True,
+        description="Enable agent spawning tools in main endpoint",
+    )
+
 
 settings = MyClawSettings()
