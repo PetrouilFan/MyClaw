@@ -22,42 +22,6 @@ MAX_TOOL_CALLS = int(os.getenv("MYCLAW_MAX_TOOL_CALLS", "100"))
 MAX_PAYLOAD_SIZE = int(os.getenv("MYCLAW_MAX_PAYLOAD_SIZE", str(10 * 1024 * 1024)))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CHECK_UPSTREAM = os.getenv("MYCLAW_CHECK_UPSTREAM", "").lower() in ("1", "true", "yes")
-ALLOWED_COMMANDS = (
-    os.getenv("MYCLAW_ALLOWED_COMMANDS", "").split(",")
-    if os.getenv("MYCLAW_ALLOWED_COMMANDS")
-    else [
-        "git",
-        "python",
-        "npm",
-        "node",
-        "ls",
-        "cat",
-        "grep",
-        "echo",
-        "pwd",
-        "cd",
-        "mkdir",
-        "rm",
-        "cp",
-        "mv",
-        "find",
-        "head",
-        "tail",
-        "wc",
-        "curl",
-        "wget",
-        "tar",
-        "zip",
-        "unzip",
-        "exit",
-        "type",
-    ]
-)
-BLOCKED_PATTERNS = (
-    os.getenv("MYCLAW_BLOCKED_PATTERNS", "").split(",")
-    if os.getenv("MYCLAW_BLOCKED_PATTERNS")
-    else []
-)
 MAX_COMMAND_DURATION = int(os.getenv("MYCLAW_MAX_COMMAND_DURATION", "60"))
 ALLOWED_API_KEYS = (
     os.getenv("MYCLAW_ALLOWED_API_KEYS", "").split(",")
@@ -65,7 +29,11 @@ ALLOWED_API_KEYS = (
     else []
 )
 SESSION_ENABLED = os.getenv("MYCLAW_SESSION_ENABLED", "true").lower() in ("1", "true", "yes")
-SESSION_STORAGE_PATH = os.getenv("MYCLAW_SESSION_STORAGE_PATH", str(WS / "sessions"))
+SESSION_STORAGE_PATH = (
+    Path(os.getenv("MYCLAW_SESSION_STORAGE_PATH", ""))
+    if os.getenv("MYCLAW_SESSION_STORAGE_PATH")
+    else WS / "sessions"
+)
 SESSION_TOKEN_BUDGET = int(os.getenv("MYCLAW_SESSION_TOKEN_BUDGET", "100000"))
 SESSION_TTL_DAYS = int(os.getenv("MYCLAW_SESSION_TTL_DAYS", "30"))
 STATELESS_MODE = os.getenv("MYCLAW_STATELESS_MODE", "false").lower() in ("1", "true", "yes")

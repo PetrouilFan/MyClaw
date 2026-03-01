@@ -21,56 +21,8 @@ TRUNCATE_EVERY: int = 100
 MAX_PROCESSES = int(os.getenv("MYCLAW_MAX_PROCESSES", str(MAX_PROCESSES)))
 MAX_OUTPUT_LINES = int(os.getenv("MYCLAW_MAX_OUTPUT_LINES", str(MAX_OUTPUT_LINES)))
 
-ALLOWED_COMMANDS = (
-    os.getenv("MYCLAW_ALLOWED_COMMANDS", "").split(",")
-    if os.getenv("MYCLAW_ALLOWED_COMMANDS")
-    else [
-        "git",
-        "python",
-        "npm",
-        "node",
-        "ls",
-        "cat",
-        "grep",
-        "echo",
-        "pwd",
-        "cd",
-        "mkdir",
-        "rm",
-        "cp",
-        "mv",
-        "find",
-        "head",
-        "tail",
-        "wc",
-        "curl",
-        "wget",
-        "tar",
-        "zip",
-        "unzip",
-        "exit",
-        "type",
-    ]
-)
-BLOCKED_PATTERNS = (
-    os.getenv("MYCLAW_BLOCKED_PATTERNS", "").split(",")
-    if os.getenv("MYCLAW_BLOCKED_PATTERNS")
-    else [
-        r"rm -rf /",
-        r"curl \| sh",
-        r"wget \| sh",
-        r"; rm ",
-        r"&& rm ",
-        r"\|\| rm ",
-        r"> /etc/passwd",
-        r"> /etc/shadow",
-        r"chmod 777",
-        r"chown -R",
-        r"mkfs",
-        r"dd if=",
-        r":\(\){:\|:&};:",
-    ]
-)
+ALLOWED_COMMANDS: list[str] = []
+BLOCKED_PATTERNS: list[str] = []
 MAX_COMMAND_DURATION = int(os.getenv("MYCLAW_MAX_COMMAND_DURATION", "60"))
 
 _processes: dict[int, dict[str, Any]] = {}
@@ -95,46 +47,17 @@ def _log_audit(command: str, action: str, result: str = None, details: dict = No
 
 
 def _is_command_allowed(command: str) -> tuple[bool, str]:
-    """Check if command is in the allowed list."""
-    if not ALLOWED_COMMANDS:
-        return True, ""
-
-    command_lower = command.lower().strip()
-    parts = command_lower.split()
-    if not parts:
-        return False, "Empty command"
-
-    base_cmd = parts[0]
-
-    if base_cmd not in [c.lower() for c in ALLOWED_COMMANDS]:
-        return False, f"Command '{base_cmd}' not in allowed list: {ALLOWED_COMMANDS}"
-
+    """Check if command is allowed (always true for root access)."""
     return True, ""
 
 
 def _is_pattern_blocked(command: str) -> tuple[bool, str]:
-    """Check if command matches any blocked pattern."""
-    command_lower = command.lower()
-
-    for pattern in BLOCKED_PATTERNS:
-        if re.search(pattern, command_lower, re.IGNORECASE):
-            return True, f"Command matches blocked pattern: {pattern}"
-
+    """Check if command matches any blocked pattern (always false for root access)."""
     return False, ""
 
 
 def _validate_command(command: str) -> tuple[bool, str]:
-    """Validate a command for security."""
-    is_allowed, msg = _is_command_allowed(command)
-    if not is_allowed:
-        _log_audit(command, "BLOCKED_ALLOWED_LIST", "denied", {"reason": msg})
-        return False, msg
-
-    is_blocked, msg = _is_pattern_blocked(command)
-    if is_blocked:
-        _log_audit(command, "BLOCKED_PATTERN", "denied", {"reason": msg})
-        return False, msg
-
+    """Validate a command (always allowed for root access)."""
     return True, ""
 
 
