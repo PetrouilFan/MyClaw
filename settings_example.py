@@ -56,3 +56,8 @@ SUBAGENT_MAX_AGENTS = int(os.getenv("MYCLAW_SUBAGENT_MAX_AGENTS", "10"))
 SUBAGENT_MAX_DEPTH = int(os.getenv("MYCLAW_SUBAGENT_MAX_DEPTH", "3"))
 SUBAGENT_TIMEOUT = int(os.getenv("MYCLAW_SUBAGENT_TIMEOUT", "300"))
 ENABLE_AGENT_TOOLS = os.getenv("MYCLAW_ENABLE_AGENT_TOOLS", "true").lower() in ("1", "true", "yes")
+ALLOWED_ORIGINS = (
+    os.getenv("MYCLAW_ALLOWED_ORIGINS", "*").split(",")
+    if os.getenv("MYCLAW_ALLOWED_ORIGINS")
+    else ["*"]
+)
