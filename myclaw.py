@@ -30,6 +30,7 @@ from settings import (
     SYSTEM_PROMPT,
     WS,
     ALLOWED_API_KEYS,
+    ALLOWED_ORIGINS,
     SESSION_ENABLED,
     SESSION_STORAGE_PATH,
     SESSION_TOKEN_BUDGET,
@@ -152,7 +153,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

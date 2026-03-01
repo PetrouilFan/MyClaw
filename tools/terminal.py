@@ -20,8 +20,14 @@ TRUNCATE_EVERY: int = 100
 MAX_PROCESSES = int(os.getenv("MYCLAW_MAX_PROCESSES", str(MAX_PROCESSES)))
 MAX_OUTPUT_LINES = int(os.getenv("MYCLAW_MAX_OUTPUT_LINES", str(MAX_OUTPUT_LINES)))
 
-ALLOWED_COMMANDS: list[str] = []
-BLOCKED_PATTERNS: list[str] = []
+ALLOWED_COMMANDS: list[str] = (
+    os.getenv("MYCLAW_ALLOWED_COMMANDS", "").split(",")
+    if os.getenv("MYCLAW_ALLOWED_COMMANDS")
+    else []
+)
+BLOCKED_PATTERNS: list[str] = os.getenv(
+    "MYCLAW_BLOCKED_PATTERNS", "rm -rf,del /f,format,shutdown,reboot,powershell -enc"
+).split(",")
 MAX_COMMAND_DURATION = int(os.getenv("MYCLAW_MAX_COMMAND_DURATION", "60"))
 
 _processes: dict[int, dict[str, Any]] = {}
@@ -46,17 +52,39 @@ def _log_audit(command: str, action: str, result: str = None, details: dict = No
 
 
 def _is_command_allowed(command: str) -> tuple[bool, str]:
-    """Check if command is allowed (always true for root access)."""
-    return True, ""
+    """Check if command is allowed based on allowlist."""
+    if not ALLOWED_COMMANDS:
+        return True, ""
+
+    command_lower = command.lower()
+    for allowed in ALLOWED_COMMANDS:
+        if allowed.lower() in command_lower:
+            return True, ""
+    return False, f"Command not in allowlist: {ALLOWED_COMMANDS}"
 
 
 def _is_pattern_blocked(command: str) -> tuple[bool, str]:
-    """Check if command matches any blocked pattern (always false for root access)."""
+    """Check if command matches any blocked pattern."""
+    command_lower = command.lower()
+    for pattern in BLOCKED_PATTERNS:
+        if pattern.lower() in command_lower:
+            return True, f"Command matches blocked pattern: {pattern}"
     return False, ""
 
 
 def _validate_command(command: str) -> tuple[bool, str]:
-    """Validate a command (always allowed for root access)."""
+    """Validate a command against allowlist and blocklist."""
+    if not command or not command.strip():
+        return False, "Empty command"
+
+    blocked, reason = _is_pattern_blocked(command)
+    if blocked:
+        return False, reason
+
+    allowed, reason = _is_command_allowed(command)
+    if not allowed:
+        return False, reason
+
     return True, ""
 
 
