@@ -2,7 +2,6 @@
 
 import json
 
-import pytest
 
 from token_budget import (
     calculate_available_for_history,

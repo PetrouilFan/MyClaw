@@ -1,7 +1,6 @@
 """Tests for Agent Service - LLM execution for agents."""
 
-import json
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 import httpx

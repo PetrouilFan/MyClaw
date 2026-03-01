@@ -2,12 +2,8 @@
 
 import json
 import os
-import tempfile
 import time
-from datetime import datetime, timedelta
-from pathlib import Path
 
-import pytest
 
 from session_manager import SessionManager, get_session_manager, reset_session_manager
 
@@ -18,7 +14,7 @@ class TestSessionManagerInit:
     def test_init_creates_storage_dir(self, tmp_path):
         """Test that initialization creates the storage directory."""
         storage = tmp_path / "sessions"
-        sm = SessionManager(storage_dir=storage)
+        SessionManager(storage_dir=storage)
         assert storage.exists()
         assert storage.is_dir()
 

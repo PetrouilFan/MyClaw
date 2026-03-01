@@ -130,7 +130,7 @@ class TestToolValidator:
     def test_validate_or_raise_invalid(self, sample_schemas):
         """Test validate_or_raise raises on invalid."""
         validator = ToolValidator(sample_schemas)
-        with patch("tools.tool_validator.log") as mock_log:
+        with patch("tools.tool_validator.log"):
             with pytest.raises(ToolValidationError) as exc:
                 validator.validate_or_raise("read_file", {})
             assert exc.value.tool_name == "read_file"

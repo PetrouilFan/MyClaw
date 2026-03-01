@@ -8,7 +8,6 @@ from cache import (
     CacheEntry,
     ResponseCache,
     cache_response,
-    get_cache,
     get_cached_response,
     invalidate_cache,
 )

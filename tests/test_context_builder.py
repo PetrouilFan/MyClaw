@@ -1,10 +1,7 @@
 """Tests for Context Builder."""
 
-import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
-import pytest
 
 from context_builder import ContextBuilder, get_context_builder, reset_context_builder
 

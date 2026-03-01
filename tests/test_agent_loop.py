@@ -1,6 +1,5 @@
 """Tests for Agent Loop - planning, retry logic, and reflection."""
 
-import pytest
 from agent_loop import (
     ToolRetry,
     ErrorFormatter,

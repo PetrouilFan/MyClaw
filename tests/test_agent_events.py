@@ -2,9 +2,7 @@
 
 import asyncio
 
-import pytest
 from agents.events import EventManager, get_event_manager, reset_event_manager
-from agents.models import AgentEvent, AgentStatus
 
 
 class TestEventManager:
@@ -47,7 +45,7 @@ class TestEventManager:
     def test_event_stream(self):
         """Test event stream generator."""
         manager = EventManager()
-        queue = manager.subscribe("agent1")
+        manager.subscribe("agent1")
 
         async def test_stream():
             events = []

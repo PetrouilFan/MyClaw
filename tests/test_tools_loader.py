@@ -1,10 +1,6 @@
 """Tests for tools package - loader and __init__."""
 
-import tempfile
-from pathlib import Path
-from unittest.mock import patch
 
-import pytest
 
 
 class TestLoadTools:
