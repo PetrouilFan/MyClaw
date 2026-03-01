@@ -48,6 +48,8 @@ from settings import (
 
 from session_manager import get_session_manager
 from context_builder import get_context_builder
+
+RATE_LIMIT_PER_MINUTE = 60
 from agent_loop import (
     add_planning_to_system_prompt,
     get_planning_agent,

@@ -59,7 +59,7 @@ BLOCKED_PATTERNS = (
         r"wget \| sh",
         r"; rm ",
         r"&& rm ",
-        r"|| rm ",
+        r"\|\| rm ",
         r"> /etc/passwd",
         r"> /etc/shadow",
         r"chmod 777",

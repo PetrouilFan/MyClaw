@@ -4,29 +4,31 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from httpx import Response, ASGITransport
+from httpx import Response
 
 
 @pytest.fixture
 def mock_ollama():
     """Mock the upstream Ollama API."""
-    with patch("myclaw.http") as mock_http:
-        mock_response = Response(
-            200,
-            json={
-                "choices": [
-                    {
-                        "message": {
-                            "role": "assistant",
-                            "content": "Hello, how can I help you?",
-                        }
+    mock_http = AsyncMock()
+    mock_response = Response(
+        200,
+        json={
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Hello, how can I help you?",
                     }
-                ]
-            },
-        )
-        mock_http.get = AsyncMock(return_value=Response(200, json={"models": []}))
-        mock_http.post = AsyncMock(return_value=mock_response)
-        mock_http.stream = AsyncMock()
+                }
+            ]
+        },
+    )
+    mock_http.get = AsyncMock(return_value=Response(200, json={"models": []}))
+    mock_http.post = AsyncMock(return_value=mock_response)
+    mock_http.stream = AsyncMock()
+
+    with patch("myclaw.http", mock_http):
         yield mock_http
 
 
@@ -35,8 +37,7 @@ def client(mock_ollama):
     """Create a test client for the FastAPI app."""
     from myclaw import app
 
-    transport = ASGITransport(app=app)
-    with TestClient(transport) as test_client:
+    with TestClient(app=app) as test_client:
         yield test_client
 
 
