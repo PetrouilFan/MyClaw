@@ -80,7 +80,7 @@ class ContextBuilder:
                 if estimate_tokens(result) <= max_tokens:
                     return result
 
-        recent = [l.strip() for l in lines if l.strip() and not l.startswith("#")]
+        recent = [line.strip() for line in lines if line.strip() and not line.startswith("#")]
         if recent:
             result = "\n".join(recent[-self.max_memories :])
             if estimate_tokens(result) <= max_tokens:

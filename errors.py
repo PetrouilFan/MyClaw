@@ -6,7 +6,6 @@ Provides error categorization, retry logic, and dead letter queue.
 import asyncio
 import json
 import logging
-from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
@@ -121,7 +120,6 @@ class DeadLetterQueue:
 def categorize_error(error: Exception, context: dict = {}) -> ErrorDetail:
     """Categorize an error and determine handling strategy."""
     error_str = str(error).lower()
-    error_type = type(error).__name__
 
     if isinstance(error, TimeoutError):
         return ErrorDetail(
@@ -212,7 +210,7 @@ def categorize_error(error: Exception, context: dict = {}) -> ErrorDetail:
         message=str(error),
         is_retryable=True,
         retry_after=5,
-    }
+    )
 
 
 async def retry_with_backoff(

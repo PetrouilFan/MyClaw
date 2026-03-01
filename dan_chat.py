@@ -19,7 +19,7 @@ def extract_answer(text: str) -> str:
         text[:200]
         if len(text) > 200
         else (
-            "\n".join([l.strip() for l in text.split("\n") if l.strip()])
+            "\n".join([line.strip() for line in text.split("\n") if line.strip()])
             if "\n" in text
             else text
         )
@@ -123,9 +123,7 @@ class DANApp(App):
                 except Exception as e:
                     self.add_message("System", f"Failed to process {md_file}: {e}")
         self.chat_history.append({"role": "system", "content": system_prompt})
-        self.add_message(
-            "System", f"Ready to chat with MyClaw. Endpoint: {self.myclaw_url}"
-        )
+        self.add_message("System", f"Ready to chat with MyClaw. Endpoint: {self.myclaw_url}")
 
     def add_message(self, role: str, text: str, model_name: str = None) -> ChatMessage:
         msg = ChatMessage(role, text, model_name)
@@ -173,47 +171,32 @@ class DANApp(App):
                     line_str = line.decode("utf-8") if isinstance(line, bytes) else line
                     if not line_str.strip() or not line_str.startswith("data"):
                         continue
-                    data = (
-                        line_str[5:].strip()
-                        if line_str.startswith("data:")
-                        else line_str
-                    )
+                    data = line_str[5:].strip() if line_str.startswith("data:") else line_str
                     if data == "[DONE]" or not data:
                         continue
                     try:
                         chunk = json.loads(data)
                         delta = chunk.get("choices", [{}])[0].get("delta", {})
-                        chunk_text = (delta.get("reasoning") or "") + (
-                            delta.get("content") or ""
-                        )
+                        chunk_text = (delta.get("reasoning") or "") + (delta.get("content") or "")
                         if chunk_text:
                             full_response += chunk_text
                             self.app.call_from_thread(dan_msg.append_text, chunk_text)
-                            self.app.call_from_thread(
-                                self.query_one("#chat_container").scroll_end
-                            )
+                            self.app.call_from_thread(self.query_one("#chat_container").scroll_end)
                     except json.JSONDecodeError:
                         continue
-                final_response = extract_answer(full_response)
-                self.chat_history.append(
-                    {"role": "assistant", "content": full_response}
-                )
+                self.chat_history.append({"role": "assistant", "content": full_response})
         except Exception as e:
             err_msg = str(e)
             self.app.call_from_thread(self.system_message, f"Stream error: {err_msg}")
             if "connection" in err_msg.lower() or "closed" in err_msg.lower():
-                self.app.call_from_thread(
-                    self.system_message, "Retrying with non-streaming..."
-                )
+                self.app.call_from_thread(self.system_message, "Retrying with non-streaming...")
                 self.generate_response_fallback(dan_msg)
 
     def generate_response_fallback(self, dan_msg: ChatMessage) -> None:
         try:
             response = self._make_request(stream=False)
             if response.status_code != 200:
-                self.app.call_from_thread(
-                    self.system_message, f"Server error: {response.text}"
-                )
+                self.app.call_from_thread(self.system_message, f"Server error: {response.text}")
                 return
             result = response.json()
             if "error" in result:

@@ -1,10 +1,7 @@
 """Agent-related tools for LLM function calling."""
 
 import asyncio
-import json
-from typing import Any, Optional
-
-from settings import MAX_TOOL_CALLS
+from typing import Optional
 
 
 async def spawn_subagent(
@@ -193,7 +190,6 @@ async def wait_for_agent_message(
         else:
             return {
                 "success": True,
-                "message": None,
                 "timeout": True,
                 "message": "No message received within timeout",
             }

@@ -69,23 +69,27 @@ def get_tokenizer_for_model(model: str):
 
     if enc is not None:
         model_lower = model.lower()
+        try:
+            import tiktoken
 
-        if "qwen" in model_lower:
-            try:
-                return tiktoken.get_encoding("cl100k_base")
-            except ImportError:
-                pass
+            if "qwen" in model_lower:
+                try:
+                    return tiktoken.get_encoding("cl100k_base")
+                except ImportError:
+                    pass
 
-        if "gpt" in model_lower:
-            if "4" in model_lower:
-                return tiktoken.get_encoding("cl100k_base")
-            return tiktoken.get_encoding("p50k_base")
+            if "gpt" in model_lower:
+                if "4" in model_lower:
+                    return tiktoken.get_encoding("cl100k_base")
+                return tiktoken.get_encoding("p50k_base")
 
-        if "llama" in model_lower or "mistral" in model_lower:
-            try:
-                return tiktoken.get_encoding("cc100")
-            except ImportError:
-                pass
+            if "llama" in model_lower or "mistral" in model_lower:
+                try:
+                    return tiktoken.get_encoding("cc100")
+                except ImportError:
+                    pass
+        except ImportError:
+            pass
 
     return estimate_tokens
 

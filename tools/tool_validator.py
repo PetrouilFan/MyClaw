@@ -4,7 +4,7 @@ Validates tool arguments against their JSON schema definitions.
 """
 
 import logging
-from typing import Any, Optional
+from typing import Optional
 
 log = logging.getLogger("myclaw.tool_validator")
 

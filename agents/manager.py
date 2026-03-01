@@ -3,11 +3,9 @@
 import asyncio
 import logging
 import uuid
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
-from agents.models import Agent, AgentMessage, AgentStatus, generate_agent_id
+from agents.models import Agent, AgentMessage, AgentStatus
 from agents.registry import get_agent_registry, AgentRegistry
 from agents.queue import get_message_queue, MessageQueue
 from agents.events import get_event_manager, EventManager
@@ -59,12 +57,6 @@ class AgentManager:
         can_spawn, reason = self.registry.can_spawn(parent_id, (parent_id and 1) or 0)
         if not can_spawn:
             raise ValueError(reason)
-
-        parent_depth = 0
-        if parent_id:
-            parent = self.registry.get_agent(parent_id)
-            if parent:
-                parent_depth = parent.depth
 
         agent = self.registry.create_agent(
             name=name,

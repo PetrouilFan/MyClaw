@@ -2,7 +2,6 @@
 
 import platform
 import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -62,11 +61,10 @@ class TestRunTerminalCommand:
         """Test max processes limit is enforced."""
         from tools.terminal import run_terminal_command, _processes
 
-        original_limit = 1
         with patch("tools.terminal.MAX_PROCESSES", 1):
             _processes.clear()
 
-            result = run_terminal_command("echo test", background=True)
+            run_terminal_command("echo test", background=True)
 
             result2 = run_terminal_command("echo test2", background=True)
 
@@ -187,7 +185,7 @@ class TestCleanupProcesses:
 
         result = run_terminal_command("sleep 100", background=True)
 
-        removed = cleanup_processes(keep_running=True)
+        cleanup_processes(keep_running=True)
 
         assert result["pid"] in _processes
 
@@ -195,7 +193,7 @@ class TestCleanupProcesses:
         """Test cleanup removes completed processes."""
         from tools.terminal import run_terminal_command, cleanup_processes
 
-        result = run_terminal_command("echo done")
+        run_terminal_command("echo done")
 
         removed = cleanup_processes(keep_running=False)
 

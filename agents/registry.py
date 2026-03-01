@@ -85,7 +85,6 @@ class AgentRegistry:
 
     def append_to_conversation(self, agent_id: str, role: str, content: str) -> None:
         """Append a message to the agent's conversation history."""
-        conversation_path = self._get_conversation_path(agent_id)
         messages = self.load_conversation(agent_id)
         messages.append(
             {

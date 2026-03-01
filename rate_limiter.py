@@ -5,7 +5,6 @@ Provides per-session and per-IP rate limiting with header support.
 
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
 from typing import Optional
 
 from pydantic import BaseModel

@@ -8,10 +8,8 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
 
-from agents.models import AgentStatus
 
 logger = logging.getLogger("myclaw.agent_timeout")
 

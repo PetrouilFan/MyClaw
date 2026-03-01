@@ -17,13 +17,6 @@ from telegram.ext import (
     filters,
 )
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stderr)],
-)
-logger = logging.getLogger("telegram")
-
 from settings import (
     MDS,
     MYCLAW_API_KEY,
@@ -35,6 +28,13 @@ from settings import (
 )
 from tools._loader import load_tools
 from tools.tool_parser import clean_content, extract_tool_calls
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(sys.stderr)],
+)
+logger = logging.getLogger("telegram")
 
 http = httpx.AsyncClient(timeout=300)
 histories: dict[int, list] = {}
@@ -49,9 +49,7 @@ def _load_tools() -> tuple[list, dict]:
 
 def md() -> str:
     return "\n\n".join(
-        f"<!-- {n} -->\n{(WS / n).read_text().strip()}"
-        for n in MDS
-        if (WS / n).exists()
+        f"<!-- {n} -->\n{(WS / n).read_text().strip()}" for n in MDS if (WS / n).exists()
     )
 
 
@@ -78,9 +76,7 @@ def _init_history(uid: int) -> list[dict[str, Any]]:
     return histories[uid]
 
 
-def _build_payload(
-    messages: list[dict[str, Any]], tools: list | None
-) -> dict[str, Any]:
+def _build_payload(messages: list[dict[str, Any]], tools: list | None) -> dict[str, Any]:
     return {
         "model": OLLAMA_MODEL,
         "messages": messages,
@@ -103,9 +99,7 @@ async def handle_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if saved:
             await update.message.reply_text(f"✅ Session saved to {Path(saved).name}")
         else:
-            await update.message.reply_text(
-                "✅ New session started (previous was empty)"
-            )
+            await update.message.reply_text("✅ New session started (previous was empty)")
     else:
         await update.message.reply_text("✅ New session started (no previous history)")
 
@@ -138,7 +132,7 @@ async def _execute_tool_calls(
             if isinstance(args, str):
                 try:
                     args = json.loads(args)
-                except:
+                except json.JSONDecodeError:
                     args = {}
             logger.debug(f"Executing tool: {fn} with args: {args}")
             if fn in tool_funcs:
@@ -174,13 +168,11 @@ async def handle_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     history = _init_history(uid)
     history.append({"role": "user", "content": update.message.text})
     if len(history) > MAX_HISTORY_LENGTH:
-        history = [
-            {"role": "system", "content": f"{SYSTEM_PROMPT}\n\n{md()}"}
-        ] + history[-(MAX_HISTORY_LENGTH - 1) :]
+        history = [{"role": "system", "content": f"{SYSTEM_PROMPT}\n\n{md()}"}] + history[
+            -(MAX_HISTORY_LENGTH - 1) :
+        ]
 
-    await ctx.bot.send_chat_action(
-        chat_id=update.effective_chat.id, action=ChatAction.TYPING
-    )
+    await ctx.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
 
     tools, tool_funcs = _load_tools()
     headers = _get_headers()
@@ -188,9 +180,7 @@ async def handle_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     logger.debug(f"Sending payload with {len(tools or [])} tools to {MYCLAW_URL}")
 
     try:
-        r = await http.post(
-            f"{MYCLAW_URL}/v1/chat/completions", json=payload, headers=headers
-        )
+        r = await http.post(f"{MYCLAW_URL}/v1/chat/completions", json=payload, headers=headers)
     except Exception as e:
         logger.error(f"Connection error: {e}")
         await update.message.reply_text(f"Connection error: {e}")
@@ -204,7 +194,7 @@ async def handle_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     try:
         R = r.json()
-    except:
+    except json.JSONDecodeError:
         logger.error(f"Invalid JSON from MyClaw: {r.text[:500]}")
         await update.message.reply_text(f"Invalid response from API: {r.text[:200]}")
         return

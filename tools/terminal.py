@@ -4,7 +4,6 @@ import asyncio
 import logging
 import os
 import platform
-import re
 import signal
 import time
 import uuid
@@ -311,7 +310,7 @@ def run_terminal_command(
     Use async_run_command() for async contexts.
     """
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
         import threading
 
         result: dict = {}
@@ -364,7 +363,7 @@ async def async_run_command(
 def wait_terminal_command(process_id: int, timeout: Optional[float] = None) -> dict:
     """Wait for a background command (sync wrapper)."""
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
         import threading
 
         result: dict = {}
@@ -391,7 +390,7 @@ async def async_wait_command(process_id: int, timeout: Optional[float] = None) -
 def kill_terminal_command(process_id: int) -> dict:
     """Kill a running command (sync wrapper)."""
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
         import threading
 
         result: dict = {}

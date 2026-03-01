@@ -211,7 +211,7 @@ class EventManager:
                     event = await asyncio.wait_for(queue.get(), timeout=timeout)
                     yield f"data: {json.dumps(event.model_dump(mode='json'), default=str)}\n\n"
                 except asyncio.TimeoutError:
-                    yield f": heartbeat\n\n"
+                    yield ": heartbeat\n\n"
         finally:
             if agent_id:
                 self.unsubscribe(agent_id, queue)

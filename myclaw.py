@@ -43,18 +43,22 @@ from settings import (
     ENABLE_AGENT_TOOLS,
     SUBAGENT_MAX_AGENTS,
     SUBAGENT_MAX_DEPTH,
-    SUBAGENT_TIMEOUT,
 )
 
-from session_manager import get_session_manager
-from context_builder import get_context_builder
-
-RATE_LIMIT_PER_MINUTE = 60
 from agent_loop import (
     add_planning_to_system_prompt,
     get_planning_agent,
     ErrorFormatter,
 )
+from tools._loader import invalidate_cache, load_tools
+from tools.tool_parser import clean_content, extract_tool_calls
+
+from session_manager import get_session_manager
+from context_builder import get_context_builder
+
+import metrics
+
+RATE_LIMIT_PER_MINUTE = 60
 
 try:
     from agents.tools import TOOLS as AGENT_TOOLS, TOOL_FUNCTIONS as AGENT_TOOL_FUNCTIONS
@@ -79,14 +83,10 @@ structlog.configure(
 log = structlog.get_logger()
 
 os.environ["MYCLAW_WORKSPACE"] = str(WS)
-from tools._loader import invalidate_cache, load_tools
-from tools.tool_parser import clean_content, extract_tool_calls
 
 UP = os.getenv("MYCLAW_UPSTREAM", OLLAMA_URL)
 KEY = os.getenv("MYCLAW_API_KEY", MYCLAW_API_KEY)
 CHECK_UPSTREAM = os.getenv("MYCLAW_CHECK_UPSTREAM", "").lower() in ("1", "true", "yes")
-
-import metrics
 
 http = httpx.AsyncClient(timeout=300)
 _t, _tf = None, None
@@ -325,7 +325,6 @@ async def _list_agents(a=Header(None)):
         raise HTTPException(404, "Agent system not available")
 
     from agents.registry import get_agent_registry
-    from agents.models import AgentStatus
 
     registry = get_agent_registry(
         workspace=WS,
@@ -334,7 +333,6 @@ async def _list_agents(a=Header(None)):
     )
 
     parent_id = None
-    status = None
 
     agents = registry.list_agents(parent_id=parent_id)
     return {
@@ -720,9 +718,9 @@ async def chat(request: Request, a=Header(None)):
                         if x.status_code >= 400:
                             yield f'{{"error":"Upstream {x.status_code}"}}\n'
                             return
-                        async for l in x.aiter_lines():
-                            if l:
-                                yield f"{l}\n"
+                        async for line in x.aiter_lines():
+                            if line:
+                                yield f"{line}\n"
                 except Exception as e:
                     log.error("stream_error", error=str(e))
                     yield f'{{"error":"{e}"}}\n'
