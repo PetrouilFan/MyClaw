@@ -48,6 +48,8 @@ ALLOWED_COMMANDS = (
         "tar",
         "zip",
         "unzip",
+        "exit",
+        "type",
     ]
 )
 BLOCKED_PATTERNS = (

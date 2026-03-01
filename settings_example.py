@@ -25,7 +25,33 @@ CHECK_UPSTREAM = os.getenv("MYCLAW_CHECK_UPSTREAM", "").lower() in ("1", "true",
 ALLOWED_COMMANDS = (
     os.getenv("MYCLAW_ALLOWED_COMMANDS", "").split(",")
     if os.getenv("MYCLAW_ALLOWED_COMMANDS")
-    else []
+    else [
+        "git",
+        "python",
+        "npm",
+        "node",
+        "ls",
+        "cat",
+        "grep",
+        "echo",
+        "pwd",
+        "cd",
+        "mkdir",
+        "rm",
+        "cp",
+        "mv",
+        "find",
+        "head",
+        "tail",
+        "wc",
+        "curl",
+        "wget",
+        "tar",
+        "zip",
+        "unzip",
+        "exit",
+        "type",
+    ]
 )
 BLOCKED_PATTERNS = (
     os.getenv("MYCLAW_BLOCKED_PATTERNS", "").split(",")
@@ -39,7 +65,7 @@ ALLOWED_API_KEYS = (
     else []
 )
 SESSION_ENABLED = os.getenv("MYCLAW_SESSION_ENABLED", "true").lower() in ("1", "true", "yes")
-SESSION_STORAGE_PATH = os.getenv("MYCLAW_SESSION_STORAGE_PATH", "")
+SESSION_STORAGE_PATH = os.getenv("MYCLAW_SESSION_STORAGE_PATH", str(WS / "sessions"))
 SESSION_TOKEN_BUDGET = int(os.getenv("MYCLAW_SESSION_TOKEN_BUDGET", "100000"))
 SESSION_TTL_DAYS = int(os.getenv("MYCLAW_SESSION_TTL_DAYS", "30"))
 STATELESS_MODE = os.getenv("MYCLAW_STATELESS_MODE", "false").lower() in ("1", "true", "yes")
