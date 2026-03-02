@@ -87,7 +87,7 @@ class ToolValidator:
         """
         is_valid, errors = self.validate(tool_name, arguments)
         if not is_valid:
-            log.warning("tool_validation_failed", tool=tool_name, errors=errors)
+            log.warning("Tool validation failed for '%s': %s", tool_name, errors)
             raise ToolValidationError(
                 message=f"Tool validation failed for '{tool_name}'",
                 tool_name=tool_name,
@@ -108,9 +108,9 @@ def get_tool_validator(tool_schemas: list[dict] = None) -> ToolValidator:
 
     if _validator is None:
         if tool_schemas is None:
-            from tools import TOOLS as _tools
+            from tools import get_tool_schemas
 
-            tool_schemas = _tools
+            tool_schemas = get_tool_schemas()
         _validator = ToolValidator(tool_schemas)
 
     return _validator

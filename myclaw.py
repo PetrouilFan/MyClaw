@@ -151,6 +151,12 @@ app.openapi = custom_openapi
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+if "*" in ALLOWED_ORIGINS and len(ALLOWED_ORIGINS) == 1:
+    structlog.get_logger().warning(
+        "cors_credentials_with_wildcard",
+        message="allow_credentials=True with allow_origins=['*'] is insecure",
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -621,14 +627,10 @@ async def chat(request: Request, a=Header(None)):
         if "messages" not in p:
             return _create_error_response("messages required", 400)
 
-        session_id = None
         session_history = []
 
         agent_mode = request.headers.get("X-Agent-Mode", "").lower()
         stateless_mode = agent_mode == "stateless" or STATELESS_MODE
-
-        if agent_mode == "stateless":
-            log.info("stateless_mode_enabled", via="header")
 
         if SESSION_ENABLED and not stateless_mode:
             session_id = request.headers.get("X-Session-ID")

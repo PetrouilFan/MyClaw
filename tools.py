@@ -7,6 +7,7 @@ from tools.terminal import (
     TOOLS as TERMINAL_TOOLS,
     TOOL_FUNCTIONS as TERMINAL_TOOL_FUNCTIONS,
 )
+from tools.opencode import TOOLS as OPENCODE_TOOLS, TOOL_FUNCTIONS as OPENCODE_TOOL_FUNCTIONS
 
 
 def _build_tool_schema(func):
@@ -37,8 +38,10 @@ TOOL_FUNCTIONS = {
     "append_to_file": append_to_file,
     "overwrite_file": overwrite_file,
     **TERMINAL_TOOL_FUNCTIONS,
+    **OPENCODE_TOOL_FUNCTIONS,
 }
-TOOLS = [
-    _build_tool_schema(f)
-    for f in [get_time, read_file, append_to_file, overwrite_file]
-] + TERMINAL_TOOLS
+TOOLS = (
+    [_build_tool_schema(f) for f in [get_time, read_file, append_to_file, overwrite_file]]
+    + TERMINAL_TOOLS
+    + OPENCODE_TOOLS
+)
