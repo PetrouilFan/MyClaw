@@ -7,10 +7,9 @@ import os
 import subprocess
 import time
 import httpx
-import json
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger("myclaw.opencode")
 
@@ -38,17 +37,25 @@ class _ServerManager:
         global _server_process, _server_url
 
         if _ServerManager.is_running():
+            if _server_url is None:
+                # This should never happen, but handle it gracefully
+                _server_url = f"http://localhost:{port}"
             return _server_url
 
         cmd = ["opencode", "serve", "--port", str(port)]
         logger.info("opencode_starting", port=port, cmd=" ".join(cmd))
 
-        _server_process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        try:
+            _server_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except FileNotFoundError:
+            raise RuntimeError("opencode command not found. Please install opencode.")
+        except Exception as e:
+            raise RuntimeError(f"Failed to start opencode serve: {e}")
 
         _server_url = f"http://localhost:{port}"
         time.sleep(3)
@@ -57,7 +64,7 @@ class _ServerManager:
         return _server_url
 
     @staticmethod
-    def stop():
+    def stop() -> None:
         """Stop opencode serve."""
         global _server_process, _server_url
         if _server_process:
@@ -75,42 +82,49 @@ class _OpenCodeClient:
         self.base_url = base_url.rstrip("/")
         self._http = httpx.Client(timeout=300)
 
-    def _request(self, method: str, path: str, **kwargs):
+    def _request(self, method: str, path: str, **kwargs: Any) -> dict | list:
         url = f"{self.base_url}{path}"
         resp = self._http.request(method, url, **kwargs)
         if resp.status_code >= 400:
             raise Exception(f"OpenCode API error: {resp.status_code} - {resp.text}")
         return resp.json() if resp.content else {}
 
-    def list_sessions(self) -> list:
+    def list_sessions(self) -> list[dict]:
         """GET /session"""
-        return self._request("GET", "/session") or []
+        result = self._request("GET", "/session")
+        return result if isinstance(result, list) else []
 
-    def create_session(self, project_path: str = None, title: str = None) -> dict:
+    def create_session(
+        self, project_path: Optional[str] = None, title: Optional[str] = None
+    ) -> dict:
         """POST /session"""
-        body = {}
+        body: dict = {}
         if project_path:
             body["projectPath"] = project_path
         if title:
             body["title"] = title
-        return self._request("POST", "/session", json=body)
+        result = self._request("POST", "/session", json=body)
+        return result if isinstance(result, dict) else {}
 
-    def send_prompt(self, session_id: str, query: str, model: str = None) -> dict:
+    def send_prompt(self, session_id: str, query: str, model: Optional[str] = None) -> dict:
         """POST /session/{id}/prompt"""
-        body = {"query": query}
+        body: dict = {"query": query}
         if model:
             body["model"] = {"providerID": "openai", "modelID": model}
-        return self._request("POST", f"/session/{session_id}/prompt", json=body)
+        result = self._request("POST", f"/session/{session_id}/prompt", json=body)
+        return result if isinstance(result, dict) else {}
 
     def get_session(self, session_id: str) -> dict:
         """GET /session/{id}"""
-        return self._request("GET", f"/session/{session_id}")
+        result = self._request("GET", f"/session/{session_id}")
+        return result if isinstance(result, dict) else {}
 
     def end_session(self, session_id: str) -> dict:
         """DELETE /session/{id}"""
-        return self._request("DELETE", f"/session/{session_id}")
+        result = self._request("DELETE", f"/session/{session_id}")
+        return result if isinstance(result, dict) else {}
 
-    def close(self):
+    def close(self) -> None:
         self._http.close()
 
 
@@ -129,9 +143,8 @@ def opencode_chat(
         client = _OpenCodeClient(url)
 
         if not project_path:
-            from settings import WS
-
-            project_path = str(WS)
+            ws = Path(os.getenv("MYCLAW_WORKSPACE", Path(__file__).parent.parent / "workspace"))
+            project_path = str(ws)
 
         if not session_id:
             result = client.create_session(project_path=project_path)

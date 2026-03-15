@@ -55,6 +55,17 @@ Built-in tools available to the LLM:
 - `cleanup_terminal_processes` - Cleanup completed processes
 - `get_terminal_help` - Get terminal tool usage guide
 
+### OpenCode Tools
+OpenCode integration provides AI coding agent capabilities:
+- `opencode_chat` - Send a prompt to OpenCode AI coding agent
+- `opencode_list` - List all OpenCode sessions
+- `opencode_end` - End/terminate an OpenCode session
+- `opencode_status` - Get OpenCode server and session status
+
+Environment variables for OpenCode:
+- `OPENCODE_PORT` - Port for OpenCode server (default: 4096)
+- `OPENCODE_PROJECT_PATH` - Project path for OpenCode sessions
+
 ## REST API
 | Method | Path                  | Description               |
 |--------|-----------------------|---------------------------|

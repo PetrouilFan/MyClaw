@@ -61,3 +61,7 @@ ALLOWED_ORIGINS = (
     if os.getenv("MYCLAW_ALLOWED_ORIGINS")
     else ["*"]
 )
+
+# OpenCode integration settings
+OPENCODE_PORT = int(os.getenv("OPENCODE_PORT", "4096"))
+OPENCODE_PROJECT_PATH = os.getenv("OPENCODE_PROJECT_PATH", "")
