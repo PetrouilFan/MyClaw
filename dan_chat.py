@@ -5,6 +5,7 @@ from textual import work
 import httpx
 import json
 import re
+from typing import Any, Optional
 from settings import OLLAMA_MODEL, SYSTEM_PROMPT, WS, MYCLAW_URL
 
 
@@ -26,7 +27,7 @@ def extract_answer(text: str) -> str:
     )
 
 
-def parse_response(result) -> str:
+def parse_response(result: Any) -> str:
     if isinstance(result, dict):
         msg = (
             (result.get("message") or result.get("choices", [{}])[0].get("message"))
@@ -39,7 +40,7 @@ def parse_response(result) -> str:
 
 
 class ChatMessage(Static):
-    def __init__(self, role: str, text: str, model_name: str = None):
+    def __init__(self, role: str, text: str, model_name: Optional[str] = None):
         super().__init__()
         self.role, self.raw_text, self.model_name = role, text, model_name or "AI"
         self.markdown = Markdown(f"**{role}**: {text}")
@@ -47,22 +48,19 @@ class ChatMessage(Static):
     def on_mount(self) -> None:
         self.add_class(f"message-{self.role.lower()}")
         if self.role == "System":
-            self.border_title, self.add_class = (
-                "System",
-                self.add_class("message-warning"),
-            )
+            self.border_title = "System"
+            self.add_class("message-warning")
         elif self.role in ("Assistant", "DAN"):
-            self.border_title, self.add_class = (
-                self.model_name,
-                self.add_class("message-error"),
-            )
+            self.border_title = self.model_name
+            self.add_class("message-error")
         else:
-            self.border_title, self.add_class = "You", self.add_class("message-success")
+            self.border_title = "You"
+            self.add_class("message-success")
 
     def compose(self) -> ComposeResult:
         yield self.markdown
 
-    def append_text(self, text_chunk: str):
+    def append_text(self, text_chunk: str) -> None:
         self.raw_text += text_chunk
         self.markdown.update(f"**{self.role}**: {self.raw_text}")
 
@@ -125,7 +123,7 @@ class DANApp(App):
         self.chat_history.append({"role": "system", "content": system_prompt})
         self.add_message("System", f"Ready to chat with MyClaw. Endpoint: {self.myclaw_url}")
 
-    def add_message(self, role: str, text: str, model_name: str = None) -> ChatMessage:
+    def add_message(self, role: str, text: str, model_name: Optional[str] = None) -> ChatMessage:
         msg = ChatMessage(role, text, model_name)
         container = self.query_one("#chat_container")
         container.mount(msg)
@@ -142,7 +140,7 @@ class DANApp(App):
         dan_msg = self.add_message("Assistant", "", self.model_id)
         self.generate_response(dan_msg)
 
-    def _make_request(self, stream: bool = True):
+    def _make_request(self, stream: bool = True) -> Any:
         url, headers = (
             f"{self.myclaw_url}/v1/chat/completions",
             {"Content-Type": "application/json"},
@@ -161,7 +159,7 @@ class DANApp(App):
     @work(thread=True)
     def generate_response(self, dan_msg: ChatMessage) -> None:
         try:
-            with self._make_request(stream=True) as response:
+            with self._make_request(stream=True) as response:  # type: ignore[context-manager]
                 if response.status_code != 200:
                     raise Exception(f"HTTP {response.status_code}")
                 full_response = ""
