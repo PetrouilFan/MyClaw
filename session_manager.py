@@ -54,7 +54,10 @@ class SessionManager:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            return data.get("messages", [])
+            messages = data.get("messages", [])
+            if isinstance(messages, list):
+                return messages
+            return []
         except (json.JSONDecodeError, IOError):
             return []
 
@@ -73,7 +76,7 @@ class SessionManager:
         self,
         messages: list[dict],
         system_prompt: str = "",
-        tools: list = None,
+        tools: Optional[list] = None,
     ) -> list[dict]:
         """Truncate messages to fit within token budget.
 
@@ -89,7 +92,7 @@ class SessionManager:
         if available < 500:
             return []
 
-        result = []
+        result: list[dict] = []
         current_tokens = 0
 
         for msg in reversed(messages):
@@ -124,7 +127,7 @@ _session_manager: Optional[SessionManager] = None
 
 
 def get_session_manager(
-    storage_dir: Path = None,
+    storage_dir: Optional[Path] = None,
     token_budget: int = 28000,
     ttl_days: Optional[int] = None,
 ) -> SessionManager:
