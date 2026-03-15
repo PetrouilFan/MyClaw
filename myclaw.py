@@ -6,6 +6,7 @@ import json
 import os
 import time
 from pathlib import Path
+from typing import Optional
 
 import httpx
 import uvicorn
@@ -93,7 +94,9 @@ http = httpx.AsyncClient(timeout=300)
 _t, _tf = None, None
 
 
-def _create_error_response(message: str, status_code: int, details: dict = None) -> JSONResponse:
+def _create_error_response(
+    message: str, status_code: int, details: Optional[dict] = None
+) -> JSONResponse:
     """Create a structured error response."""
     error_body = {"error": {"message": message, "code": status_code}}
     if details:
@@ -107,7 +110,7 @@ async def lifespan(app: FastAPI):
     await http.aclose()
 
 
-def custom_openapi():
+def custom_openapi() -> dict:
     if app.openapi_schema:
         return app.openapi_schema
     from fastapi.openapi.utils import get_openapi
@@ -149,7 +152,7 @@ app = FastAPI(
 app.openapi = custom_openapi
 
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
 if "*" in ALLOWED_ORIGINS and len(ALLOWED_ORIGINS) == 1:
     structlog.get_logger().warning(
@@ -357,7 +360,7 @@ async def _get_agent(agent_id: str, a=Header(None)):
     if not AGENT_TOOLS_AVAILABLE:
         raise HTTPException(404, "Agent system not available")
 
-    manager = await get_agent_manager()
+    manager = await get_agent_manager()  # type: ignore[possibly-undefined]  # type: ignore[possibly-undefined]
     status = manager.get_agent_status(agent_id)
 
     if status is None:
@@ -375,7 +378,7 @@ async def _terminate_agent(agent_id: str, a=Header(None)):
     if not AGENT_TOOLS_AVAILABLE:
         raise HTTPException(404, "Agent system not available")
 
-    manager = await get_agent_manager()
+    manager = await get_agent_manager()  # type: ignore[possibly-undefined]
     result = await manager.terminate_agent(agent_id)
 
     if not result:
@@ -405,7 +408,7 @@ async def _spawn_agent(parent_id: str, request: Request, a=Header(None)):
         return _create_error_response("task is required", 400)
 
     try:
-        manager = await get_agent_manager()
+        manager = await get_agent_manager()  # type: ignore[possibly-undefined]
         agent = await manager.spawn_agent(
             name=name,
             parent_id=parent_id,
@@ -434,7 +437,7 @@ async def _get_agent_messages(agent_id: str, a=Header(None)):
     if not AGENT_TOOLS_AVAILABLE:
         raise HTTPException(404, "Agent system not available")
 
-    manager = await get_agent_manager()
+    manager = await get_agent_manager()  # type: ignore[possibly-undefined]
     messages = manager.get_messages(agent_id)
 
     return {
@@ -458,7 +461,7 @@ async def _agent_events(agent_id: str):
     if not AGENT_TOOLS_AVAILABLE:
         raise HTTPException(404, "Agent system not available")
 
-    event_manager = get_event_manager()
+    event_manager = get_event_manager()  # type: ignore[possibly-undefined]
 
     async def event_generator():
         try:
