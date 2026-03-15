@@ -136,7 +136,8 @@ class MessageQueue:
         try:
             if timeout:
                 return await asyncio.wait_for(queue.get(), timeout=timeout)
-            return await queue.get()
+            result = await queue.get()
+            return result if isinstance(result, AgentMessage) else None
         except asyncio.TimeoutError:
             return None
 
@@ -152,7 +153,7 @@ _queue: Optional[MessageQueue] = None
 _queue_lock = threading.Lock()
 
 
-def get_message_queue(workspace: Path = None) -> MessageQueue:
+def get_message_queue(workspace: Optional[Path] = None) -> MessageQueue:
     """Get or create the global message queue."""
     global _queue
 
