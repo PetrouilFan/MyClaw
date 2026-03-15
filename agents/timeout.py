@@ -39,7 +39,7 @@ class AgentTimeoutInfo:
 class AgentTimeoutManager:
     """Manages timeouts for agents."""
 
-    def __init__(self, config: TimeoutConfig = None):
+    def __init__(self, config: Optional[TimeoutConfig] = None):
         self.config = config or TimeoutConfig()
         self._timeouts: dict[str, AgentTimeoutInfo] = {}
         self._lock = threading.RLock()
@@ -51,7 +51,7 @@ class AgentTimeoutManager:
         self._monitor_task: Optional[threading.Thread] = None
         self._running = False
 
-    def start_agent(self, agent_id: str, timeout: int = None) -> None:
+    def start_agent(self, agent_id: str, timeout: Optional[int] = None) -> None:
         """Start tracking timeout for an agent."""
         with self._lock:
             self._timeouts[agent_id] = AgentTimeoutInfo(
@@ -147,7 +147,7 @@ class AgentTimeoutManager:
                             agent_id,
                             {
                                 "time_remaining": self.get_time_remaining(agent_id),
-                                "timeout": self._timeouts.get(agent_id, {}).timeout
+                                "timeout": self._timeouts[agent_id].timeout
                                 if agent_id in self._timeouts
                                 else 0,
                             },
@@ -206,7 +206,7 @@ class AgentTimeoutManager:
 _timeout_manager: Optional[AgentTimeoutManager] = None
 
 
-def get_timeout_manager(config: TimeoutConfig = None) -> AgentTimeoutManager:
+def get_timeout_manager(config: Optional[TimeoutConfig] = None) -> AgentTimeoutManager:
     """Get or create the timeout manager."""
     global _timeout_manager
 
@@ -217,11 +217,11 @@ def get_timeout_manager(config: TimeoutConfig = None) -> AgentTimeoutManager:
 
 
 async def with_timeout(
-    coro,
+    coro: Any,
     timeout: int,
-    on_timeout: Callable = None,
-    on_warning: Callable = None,
-):
+    on_timeout: Optional[Callable] = None,
+    on_warning: Optional[Callable] = None,
+) -> Any:
     """Run a coroutine with timeout.
 
     Args:
