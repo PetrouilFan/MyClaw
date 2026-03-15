@@ -79,7 +79,10 @@ class AgentRegistry:
         try:
             with open(conversation_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            return data.get("messages", [])
+            messages = data.get("messages", [])
+            if isinstance(messages, list):
+                return messages
+            return []
         except (json.JSONDecodeError, IOError):
             return []
 
@@ -103,7 +106,10 @@ class AgentRegistry:
 
         try:
             with open(audit_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+                return []
         except (json.JSONDecodeError, IOError):
             return []
 
@@ -165,7 +171,7 @@ class AgentRegistry:
         self,
         name: str,
         parent_id: Optional[str] = None,
-        metadata: dict = None,
+        metadata: Optional[dict] = None,
     ) -> Agent:
         """Create a new agent.
 
@@ -297,7 +303,7 @@ _registry_lock = threading.Lock()
 
 
 def get_agent_registry(
-    workspace: Path = None,
+    workspace: Optional[Path] = None,
     max_agents: int = 10,
     max_depth: int = 3,
 ) -> AgentRegistry:
