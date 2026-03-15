@@ -4,7 +4,7 @@ Adds planning, retry logic, and reflection for more reliable tool use.
 """
 
 import json
-from typing import Any
+from typing import Any, Optional
 
 
 PLANNING_PROMPT = """## Agent Guidelines
@@ -82,7 +82,7 @@ class ErrorFormatter:
     """Formats errors for the LLM to understand and respond to."""
 
     @staticmethod
-    def format_tool_error(tool_name: str, error: str, args: dict = None) -> str:
+    def format_tool_error(tool_name: str, error: str, args: Optional[dict] = None) -> str:
         """Format a tool error for the LLM."""
         msg = f"Tool '{tool_name}' execution failed.\n"
         msg += f"Error: {error}\n"
@@ -126,7 +126,7 @@ class PlanningAgent:
         self.enable_reflection = enable_reflection
         self.tool_retry = ToolRetry(max_retries=2)
 
-    def create_plan(self, user_message: str, available_tools: list = None) -> str:
+    def create_plan(self, user_message: str, available_tools: Optional[list] = None) -> str:
         """Create a plan based on user message."""
         if not self.enable_planning:
             return ""
