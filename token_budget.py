@@ -52,11 +52,13 @@ def estimate_tokens_precise(text: str) -> int:
     """
     enc = _get_tiktoken_encoder()
     if enc is not None:
-        return len(enc.encode(text))
+        # Type assertion for mypy - enc has encode method after None check
+        encoder = enc
+        return len(encoder.encode(text))  # type: ignore[attr-defined]
     return estimate_tokens(text)
 
 
-def get_tokenizer_for_model(model: str):
+def get_tokenizer_for_model(model: str) -> Optional[object]:
     """Get appropriate tokenizer for a specific model.
 
     Args:
@@ -74,18 +76,18 @@ def get_tokenizer_for_model(model: str):
 
             if "qwen" in model_lower:
                 try:
-                    return tiktoken.get_encoding("cl100k_base")
+                    return tiktoken.get_encoding("cl100k_base")  # type: ignore[no-any-return]
                 except ImportError:
                     pass
 
             if "gpt" in model_lower:
                 if "4" in model_lower:
-                    return tiktoken.get_encoding("cl100k_base")
-                return tiktoken.get_encoding("p50k_base")
+                    return tiktoken.get_encoding("cl100k_base")  # type: ignore[no-any-return]
+                return tiktoken.get_encoding("p50k_base")  # type: ignore[no-any-return]
 
             if "llama" in model_lower or "mistral" in model_lower:
                 try:
-                    return tiktoken.get_encoding("cc100")
+                    return tiktoken.get_encoding("cc100")  # type: ignore[no-any-return]
                 except ImportError:
                     pass
         except ImportError:
@@ -144,7 +146,7 @@ def truncate_messages(
     if not messages:
         return []
 
-    result = []
+    result: list[dict] = []
     current_tokens = 0
 
     for msg in reversed(messages):
