@@ -6,7 +6,7 @@ import httpx
 import json
 import re
 from typing import Any, Optional
-from settings import OLLAMA_MODEL, SYSTEM_PROMPT, WS, MYCLAW_URL
+from config import settings
 
 
 def extract_answer(text: str) -> str:
@@ -91,11 +91,11 @@ class DANApp(App):
     def on_mount(self) -> None:
         self.title, self.model_id, self.myclaw_url = (
             "Dan Chat",
-            OLLAMA_MODEL,
-            MYCLAW_URL,
+            settings.model,
+            settings.myclaw_url,
         )
         self.http, self.chat_history = httpx.Client(timeout=300), []
-        system_prompt = SYSTEM_PROMPT
+        system_prompt = settings.system_prompt
         for md_file in [
             "identity.md",
             "personality.md",
@@ -103,7 +103,7 @@ class DANApp(App):
             "soul.md",
             "bootstrap.md",
         ]:
-            md_path = WS / md_file
+            md_path = settings.workspace / md_file
             if md_path.exists():
                 try:
                     md_content = md_path.read_text(encoding="utf-8")

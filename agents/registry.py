@@ -314,9 +314,9 @@ def get_agent_registry(
         with _registry_lock:
             if _registry is None:
                 if workspace is None:
-                    from settings import WS
+                    from config import settings
 
-                    workspace = WS
+                    workspace = settings.workspace
 
                 _registry = AgentRegistry(
                     workspace=workspace,

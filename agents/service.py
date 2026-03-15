@@ -6,13 +6,7 @@ from typing import Optional
 
 import httpx
 
-from settings import (
-    OLLAMA_MODEL,
-    OLLAMA_URL,
-    SYSTEM_PROMPT,
-    WS,
-    MAX_TOOL_CALLS,
-)
+from config import settings
 
 logger = logging.getLogger("myclaw.agents.service")
 
@@ -29,8 +23,8 @@ class AgentService:
         upstream: str = None,
         timeout: int = 300,
     ):
-        self.model = model or OLLAMA_MODEL
-        self.upstream = upstream or OLLAMA_URL
+        self.model = model or settings.model
+        self.upstream = upstream or settings.upstream
         self.timeout = timeout
         self._http: Optional[httpx.AsyncClient] = None
 
@@ -67,10 +61,10 @@ class AgentService:
 
         http = await self._get_http()
 
-        cb = get_context_builder(workspace=WS)
+        cb = get_context_builder(workspace=settings.workspace)
 
         system_content = cb.build_system_prompt(
-            base_prompt=SYSTEM_PROMPT
+            base_prompt=settings.system_prompt
             + "\n\nYou are a subagent handling a specific task. Communicate your progress and results to the parent agent.",
         )
 
@@ -90,7 +84,7 @@ class AgentService:
         from tools._loader import load_tools
         from pathlib import Path
 
-        tools_list, tool_functions = load_tools(Path("."), WS)
+        tools_list, tool_functions = load_tools(Path("."), settings.workspace)
 
         url = f"{self.upstream.rstrip('/')}/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
@@ -103,7 +97,7 @@ class AgentService:
 
         tool_call_count = 0
 
-        while tool_call_count < MAX_TOOL_CALLS:
+        while tool_call_count < settings.max_tool_calls:
             try:
                 response = await http.post(url, json=payload, headers=headers)
 

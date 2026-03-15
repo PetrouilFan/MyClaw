@@ -310,9 +310,9 @@ def get_audit_logger(workspace: Optional[Path] = None) -> AuditLogger:
 
     if _audit_logger is None:
         if workspace is None:
-            from settings import WS
+            from config import settings
 
-            workspace = WS
+            workspace = settings.workspace
 
         _audit_logger = AuditLogger(workspace / "audit")
 

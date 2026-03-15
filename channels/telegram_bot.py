@@ -17,15 +17,7 @@ from telegram.ext import (
     filters,
 )
 
-from settings import (
-    MDS,
-    MYCLAW_API_KEY,
-    MYCLAW_URL,
-    OLLAMA_MODEL,
-    SYSTEM_PROMPT,
-    TELEGRAM_BOT_TOKEN,
-    WS,
-)
+from config import settings
 from tools._loader import load_tools
 from tools.tool_parser import clean_content, extract_tool_calls
 
@@ -44,12 +36,12 @@ SESSIONS_DIR.mkdir(exist_ok=True)
 
 
 def _load_tools() -> tuple[list, dict]:
-    return load_tools(project_root=Path(__file__).parent.parent, workspace=WS)
+    return load_tools(project_root=Path(__file__).parent.parent, workspace=settings.workspace)
 
 
 def md() -> str:
     return "\n\n".join(
-        f"<!-- {n} -->\n{(WS / n).read_text().strip()}" for n in MDS if (WS / n).exists()
+        f"<!-- {n} -->\n{(settings.workspace / n).read_text().strip()}" for n in settings.mds if (settings.workspace / n).exists()
     )
 
 
@@ -60,8 +52,8 @@ def save_session(uid: int, chat_history: list) -> str | None:
     session_data = {
         "created_at": datetime.now().isoformat(),
         "user_id": uid,
-        "model": OLLAMA_MODEL,
-        "endpoint": MYCLAW_URL,
+        "model": settings.model,
+        "endpoint": settings.myclaw_url,
         "message_count": len(chat_history),
         "messages": chat_history,
     }
@@ -72,13 +64,13 @@ def save_session(uid: int, chat_history: list) -> str | None:
 
 def _init_history(uid: int) -> list[dict[str, Any]]:
     if uid not in histories or len(histories[uid]) > MAX_HISTORY_LENGTH:
-        histories[uid] = [{"role": "system", "content": f"{SYSTEM_PROMPT}\n\n{md()}"}]
+        histories[uid] = [{"role": "system", "content": f"{settings.system_prompt}\n\n{md()}"}]
     return histories[uid]
 
 
 def _build_payload(messages: list[dict[str, Any]], tools: list | None) -> dict[str, Any]:
     return {
-        "model": OLLAMA_MODEL,
+        "model": settings.model,
         "messages": messages,
         "tools": tools if tools else None,
     }
@@ -86,8 +78,8 @@ def _build_payload(messages: list[dict[str, Any]], tools: list | None) -> dict[s
 
 def _get_headers() -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
-    if MYCLAW_API_KEY:
-        headers["Authorization"] = f"Bearer {MYCLAW_API_KEY}"
+    if settings.api_key:
+        headers["Authorization"] = f"Bearer {settings.api_key}"
     return headers
 
 
@@ -95,7 +87,7 @@ async def handle_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid in histories and histories[uid]:
         saved = save_session(uid, histories[uid])
-        histories[uid] = [{"role": "system", "content": f"{SYSTEM_PROMPT}\n\n{md()}"}]
+        histories[uid] = [{"role": "system", "content": f"{settings.system_prompt}\n\n{md()}"}]
         if saved:
             await update.message.reply_text(f"✅ Session saved to {Path(saved).name}")
         else:
@@ -146,8 +138,8 @@ async def _execute_tool_calls(
 
         try:
             r = await http.post(
-                f"{MYCLAW_URL}/v1/chat/completions",
-                json={"model": OLLAMA_MODEL, "messages": history, "tools": None},
+                f"{settings.myclaw_url}/v1/chat/completions",
+                json={"model": settings.model, "messages": history, "tools": None},
                 headers=headers,
             )
             R = r.json()
@@ -168,7 +160,7 @@ async def handle_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     history = _init_history(uid)
     history.append({"role": "user", "content": update.message.text})
     if len(history) > MAX_HISTORY_LENGTH:
-        history = [{"role": "system", "content": f"{SYSTEM_PROMPT}\n\n{md()}"}] + history[
+        history = [{"role": "system", "content": f"{settings.system_prompt}\n\n{md()}"}] + history[
             -(MAX_HISTORY_LENGTH - 1) :
         ]
 
@@ -177,10 +169,10 @@ async def handle_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     tools, tool_funcs = _load_tools()
     headers = _get_headers()
     payload = _build_payload(history, tools)
-    logger.debug(f"Sending payload with {len(tools or [])} tools to {MYCLAW_URL}")
+    logger.debug(f"Sending payload with {len(tools or [])} tools to {settings.myclaw_url}")
 
     try:
-        r = await http.post(f"{MYCLAW_URL}/v1/chat/completions", json=payload, headers=headers)
+        r = await http.post(f"{settings.myclaw_url}/v1/chat/completions", json=payload, headers=headers)
     except Exception as e:
         logger.error(f"Connection error: {e}")
         await update.message.reply_text(f"Connection error: {e}")
@@ -236,7 +228,7 @@ async def handle_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 if __name__ == "__main__":
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    app = Application.builder().token(settings.telegram_bot_token).build()
     app.add_handler(CommandHandler("new", handle_new))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
     app.run_polling()

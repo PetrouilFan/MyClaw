@@ -280,9 +280,9 @@ def get_dead_letter_queue(workspace: Optional[Path] = None) -> DeadLetterQueue:
 
     if _dlq is None:
         if workspace is None:
-            from settings import WS
+            from config import settings
 
-            workspace = WS
+            workspace = settings.workspace
         _dlq = DeadLetterQueue(workspace / "dead_letter_queue")
 
     return _dlq

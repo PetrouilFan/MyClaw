@@ -161,9 +161,9 @@ def get_message_queue(workspace: Optional[Path] = None) -> MessageQueue:
         with _queue_lock:
             if _queue is None:
                 if workspace is None:
-                    from settings import WS
+                    from config import settings
 
-                    workspace = WS
+                    workspace = settings.workspace
 
                 _queue = MessageQueue(workspace=workspace)
 

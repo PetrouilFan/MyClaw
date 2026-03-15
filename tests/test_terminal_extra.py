@@ -108,7 +108,7 @@ class TestTerminalWait:
 
     def test_wait_nonexistent_process(self):
         """Test waiting for nonexistent process."""
-        from tools.terminal import wait_terminal_command
+        from tools.terminal import wait_terminal_command_sync as wait_terminal_command
 
         result = wait_terminal_command(999999)
         assert "error" in result or "not found" in result.get("error", "").lower()
@@ -119,7 +119,7 @@ class TestTerminalKill:
 
     def test_kill_invalid_pid(self):
         """Test killing with invalid PID."""
-        from tools.terminal import kill_terminal_command
+        from tools.terminal import kill_terminal_command_sync as kill_terminal_command
 
         result = kill_terminal_command(0)
         assert "error" in result or "not found" in result.get("error", "").lower()

@@ -33,6 +33,22 @@ class MyClawSettings(BaseSettings):
         description="Ollama model to use",
     )
 
+    mds: list[str] = Field(
+        default_factory=lambda: [
+            "SOUL.md",
+            "PERSONALITY.md",
+            "MEMORIES.md",
+            "IDENTITY.md",
+            "USER.md",
+        ],
+        description="Markdown files to load for context",
+    )
+
+    system_prompt: str = Field(
+        default="You are a helpful AI assistant. Use tools as needed to help the user efficiently.",
+        description="System prompt for the AI assistant",
+    )
+
     upstream: str = Field(
         default="http://100.92.128.50:11434",
         description="Upstream Ollama API URL",
@@ -52,6 +68,11 @@ class MyClawSettings(BaseSettings):
         default=8080,
         description="Port to bind the server to",
     )
+
+    @property
+    def myclaw_url(self) -> str:
+        """Computed URL for the MyClaw server."""
+        return f"http://127.0.0.1:{self.port}"
 
     max_tool_calls: int = Field(
         default=100,
@@ -120,6 +141,8 @@ class MyClawSettings(BaseSettings):
             "tar",
             "zip",
             "unzip",
+            "exit",
+            "sleep",
         ],
         description="Allowed terminal commands (whitelist)",
     )
@@ -161,6 +184,11 @@ class MyClawSettings(BaseSettings):
         description="Allowed API keys for authentication (comma-separated)",
     )
 
+    allowed_origins: list[str] = Field(
+        default_factory=lambda: ["*"],
+        description="Allowed origins for CORS (comma-separated)",
+    )
+
     session_enabled: bool = Field(
         default=True,
         description="Enable session-based conversation history",
@@ -171,15 +199,23 @@ class MyClawSettings(BaseSettings):
         description="Path to store session files (default: workspace/sessions)",
     )
 
+    @property
+    def session_storage_path_resolved(self) -> Path:
+        """Resolved session storage path (defaults to workspace/sessions if not set)."""
+        if self.session_storage_path is None:
+            return self.workspace / "sessions"
+        return self.session_storage_path
+
     session_token_budget: int = Field(
-        default=28000,
+        default=100000,
         ge=1000,
         description="Maximum tokens for conversation history",
     )
 
-    session_ttl_days: Optional[int] = Field(
-        default=None,
-        description="Session expiration in days (None = no expiration)",
+    session_ttl_days: int = Field(
+        default=30,
+        ge=1,
+        description="Session expiration in days",
     )
 
     stateless_mode: bool = Field(
@@ -188,9 +224,9 @@ class MyClawSettings(BaseSettings):
     )
 
     max_memories: int = Field(
-        default=5,
+        default=50,
         ge=1,
-        le=20,
+        le=100,
         description="Maximum memories to inject per request",
     )
 
@@ -200,28 +236,28 @@ class MyClawSettings(BaseSettings):
     )
 
     enable_dynamic_tools: bool = Field(
-        default=False,
+        default=True,
         description="Enable dynamic tool selection based on context",
     )
 
     max_tools: int = Field(
-        default=10,
+        default=20,
         ge=1,
         description="Maximum tools to include in request",
     )
 
     enable_planning: bool = Field(
-        default=True,
+        default=False,
         description="Enable planning step before tool execution",
     )
 
     enable_reflection: bool = Field(
-        default=True,
+        default=False,
         description="Enable reflection after tool execution",
     )
 
     tool_max_retries: int = Field(
-        default=2,
+        default=3,
         ge=0,
         le=5,
         description="Maximum retries for failed tool calls",

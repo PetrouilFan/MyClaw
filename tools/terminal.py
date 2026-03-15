@@ -328,52 +328,7 @@ def cleanup_output_files(max_age_hours: int = 24) -> int:
     return removed
 
 
-def run_terminal_command(
-    command: str,
-    background: bool = False,
-    cwd: Optional[str] = None,
-    env: Optional[dict] = None,
-    timeout: Optional[float] = None,
-) -> dict:
-    """Execute a terminal command (sync wrapper).
-
-    Use async_run_command() for async contexts.
-    """
-    try:
-        asyncio.get_running_loop()
-        import threading
-
-        result: dict = {}
-
-        def run() -> None:
-            nonlocal result
-            result = _get_loop().run_until_complete(
-                run_command(
-                    command=command,
-                    background=background,
-                    cwd=cwd,
-                    env=env,
-                    timeout=timeout,
-                )
-            )
-
-        t = threading.Thread(target=run)
-        t.start()
-        t.join()
-        return result
-    except RuntimeError:
-        return _get_loop().run_until_complete(
-            run_command(
-                command=command,
-                background=background,
-                cwd=cwd,
-                env=env,
-                timeout=timeout,
-            )
-        )
-
-
-async def async_run_command(
+async def run_terminal_command(
     command: str,
     background: bool = False,
     cwd: Optional[str] = None,
@@ -390,56 +345,24 @@ async def async_run_command(
     )
 
 
-def wait_terminal_command(process_id: int, timeout: Optional[float] = None) -> dict:
-    """Wait for a background command (sync wrapper)."""
-    try:
-        asyncio.get_running_loop()
-        import threading
-
-        result: dict = {}
-
-        def run() -> None:
-            nonlocal result
-            result = _get_loop().run_until_complete(
-                wait_command(process_id=process_id, timeout=timeout)
-            )
-
-        t = threading.Thread(target=run)
-        t.start()
-        t.join()
-        return result
-    except RuntimeError:
-        return _get_loop().run_until_complete(wait_command(process_id=process_id, timeout=timeout))
-
-
-async def async_wait_command(process_id: int, timeout: Optional[float] = None) -> dict:
+async def wait_terminal_command(process_id: int, timeout: Optional[float] = None) -> dict:
     """Wait for a background command asynchronously."""
     return await wait_command(process_id=process_id, timeout=timeout)
 
 
-def kill_terminal_command(process_id: int) -> dict:
-    """Kill a running command (sync wrapper)."""
-    try:
-        asyncio.get_running_loop()
-        import threading
-
-        result: dict = {}
-
-        def run() -> None:
-            nonlocal result
-            result = _get_loop().run_until_complete(kill_command(process_id=process_id))
-
-        t = threading.Thread(target=run)
-        t.start()
-        t.join()
-        return result
-    except RuntimeError:
-        return _get_loop().run_until_complete(kill_command(process_id=process_id))
+def wait_terminal_command_sync(process_id: int, timeout: Optional[float] = None) -> dict:
+    """Sync wrapper for wait_terminal_command."""
+    return asyncio.run(wait_terminal_command(process_id, timeout))
 
 
-async def async_kill_command(process_id: int) -> dict:
+async def kill_terminal_command(process_id: int) -> dict:
     """Kill a running command asynchronously."""
     return await kill_command(process_id=process_id)
+
+
+def kill_terminal_command_sync(process_id: int) -> dict:
+    """Sync wrapper for kill_terminal_command."""
+    return asyncio.run(kill_terminal_command(process_id))
 
 
 def list_terminal_commands(status_filter: Optional[str] = None) -> dict:

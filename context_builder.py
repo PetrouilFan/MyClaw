@@ -310,9 +310,9 @@ def get_context_builder(
 
     if _context_builder is None:
         if workspace is None:
-            from settings import WS
+            from config import settings
 
-            workspace = WS
+            workspace = settings.workspace
 
         _context_builder = ContextBuilder(
             workspace=workspace,

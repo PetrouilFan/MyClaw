@@ -19,33 +19,9 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi import WebSocket
-from settings import (
-    MAX_PAYLOAD_SIZE,
-    MAX_TOOL_CALLS,
-    MDS,
-    MYCLAW_API_KEY,
-    MYCLAW_HOST,
-    MYCLAW_PORT,
-    OLLAMA_MODEL,
-    OLLAMA_URL,
-    SYSTEM_PROMPT,
-    WS,
-    ALLOWED_API_KEYS,
-    ALLOWED_ORIGINS,
-    SESSION_ENABLED,
-    SESSION_STORAGE_PATH,
-    SESSION_TOKEN_BUDGET,
-    STATELESS_MODE,
-    ENABLE_SELECTIVE_MEMORY,
-    ENABLE_DYNAMIC_TOOLS,
-    MAX_TOOLS,
-    ENABLE_PLANNING,
-    ENABLE_REFLECTION,
-    TOOL_MAX_RETRIES,
-    ENABLE_AGENT_TOOLS,
-    SUBAGENT_MAX_AGENTS,
-    SUBAGENT_MAX_DEPTH,
-)
+from config import settings
+from api_models import ChatCompletionRequest, Message, ToolCall, FunctionCall
+from dependencies import get_tools, get_session_manager, get_agent_registry, get_http_client
 
 from agent_loop import (
     add_planning_to_system_prompt,
@@ -55,8 +31,9 @@ from agent_loop import (
 from tools._loader import invalidate_cache, load_tools
 from tools.tool_parser import clean_content, extract_tool_calls
 
-from session_manager import get_session_manager
+from session_manager import SessionManager, get_session_manager as get_global_session_manager
 from context_builder import get_context_builder
+from agents.registry import AgentRegistry
 
 import metrics
 
@@ -84,14 +61,11 @@ structlog.configure(
 )
 log = structlog.get_logger()
 
-os.environ["MYCLAW_WORKSPACE"] = str(WS)
+os.environ["MYCLAW_WORKSPACE"] = str(settings.workspace)
 
-UP = os.getenv("MYCLAW_UPSTREAM", OLLAMA_URL)
-KEY = os.getenv("MYCLAW_API_KEY", MYCLAW_API_KEY)
-CHECK_UPSTREAM = os.getenv("MYCLAW_CHECK_UPSTREAM", "").lower() in ("1", "true", "yes")
-
-http = httpx.AsyncClient(timeout=300)
-_t, _tf = None, None
+# Module-level cache for backward compatibility when app_state is not provided
+_module_tools: Optional[list] = None
+_module_tool_funcs: Optional[dict] = None
 
 
 def _create_error_response(
@@ -106,8 +80,42 @@ def _create_error_response(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Lifespan context manager for FastAPI app."""
+    # Initialize app state
+    app.state.settings = settings
+    app.state.http_client = httpx.AsyncClient(timeout=300)
+
+    # Load tools
+    project_root = Path(__file__).parent
+    app.state.project_root = project_root
+    app.state.tools, app.state.tool_funcs = load_tools(
+        project_root=project_root, workspace=settings.workspace
+    )
+
+    # Initialize session manager
+    app.state.session_mgr = SessionManager(
+        storage_dir=settings.session_storage_path_resolved,
+        token_budget=settings.session_token_budget,
+        ttl_days=settings.session_ttl_days,
+    )
+
+    # Initialize agent registry
+    app.state.agent_registry = AgentRegistry(
+        workspace=settings.workspace,
+        max_agents=settings.subagent_max_agents,
+        max_depth=settings.subagent_max_depth,
+    )
+
+    # Startup security warnings
+    if not settings.api_key and not settings.allowed_api_keys:
+        log.warning("⚠️  NO API request.app.state.api_key CONFIGURED — all requests accepted")
+    if "*" in settings.allowed_origins:
+        log.warning("⚠️  CORS wildcard origin with credentials is insecure")
+
     yield
-    await http.aclose()
+
+    # Cleanup
+    await app.state.http_client.aclose()
 
 
 def custom_openapi() -> dict:
@@ -130,7 +138,7 @@ def custom_openapi() -> dict:
             "type": "apiKey",
             "in": "header",
             "name": "Authorization",
-            "description": "API key for authentication. Format: 'Bearer YOUR_API_KEY' or just 'YOUR_API_KEY'",
+            "description": "API key for authentication. Format: 'Bearer YOUR_API_request.app.state.api_key' or just 'YOUR_API_request.app.state.api_key'",
         }
     }
     for path in openapi_schema["paths"].values():
@@ -154,7 +162,7 @@ app.openapi = custom_openapi
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
-if "*" in ALLOWED_ORIGINS and len(ALLOWED_ORIGINS) == 1:
+if "*" in settings.allowed_origins and len(settings.allowed_origins) == 1:
     structlog.get_logger().warning(
         "cors_credentials_with_wildcard",
         message="allow_credentials=True with allow_origins=['*'] is insecure",
@@ -162,7 +170,7 @@ if "*" in ALLOWED_ORIGINS and len(ALLOWED_ORIGINS) == 1:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -200,9 +208,9 @@ async def general_exception_handler(request: Request, exc: Exception):
 
 def md() -> str:
     parts = []
-    for n in MDS:
+    for n in settings.mds:
         try:
-            fp = WS / n
+            fp = settings.workspace / n
             if fp.exists():
                 parts.append(f"<!-- {n} -->\n{fp.read_text().strip()}")
         except Exception as e:
@@ -210,40 +218,71 @@ def md() -> str:
     return "\n\n".join(parts)
 
 
-def tools():
-    global _t, _tf
-    if _t is None:
-        _t, _tf = load_tools(project_root=Path(__file__).parent, workspace=WS)
+def tools(app_state=None):
+    global _module_tools, _module_tool_funcs
+    
+    if app_state is None:
+        # Use module-level cache for backward compatibility
+        if _module_tools is None:
+            _module_tools, _module_tool_funcs = load_tools(
+                project_root=Path(__file__).parent,
+                workspace=settings.workspace
+            )
+            if _module_tools:
+                metrics.tools_loaded.set(len(_module_tools))
+        return _module_tools
+    
+    if app_state.tools is None:
+        app_state.tools, app_state.tool_funcs = load_tools(
+            project_root=Path(__file__).parent,
+            workspace=settings.workspace
+        )
 
-        if ENABLE_AGENT_TOOLS and AGENT_TOOLS_AVAILABLE:
-            existing_names = {t.get("function", {}).get("name", "") for t in (_t or [])}
+        if settings.enable_agent_tools and AGENT_TOOLS_AVAILABLE:
+            existing_names = {t.get("function", {}).get("name", "") for t in (app_state.tools or [])}
             for tool in AGENT_TOOLS:
                 tool_name = tool.get("function", {}).get("name", "")
                 if tool_name and tool_name not in existing_names:
-                    _t = (_t or []) + [tool]
+                    app_state.tools = (app_state.tools or []) + [tool]
 
             for name, func in AGENT_TOOL_FUNCTIONS.items():
-                if name not in (_tf or {}):
-                    _tf = _tf or {}
-                    _tf[name] = func
+                if name not in (app_state.tool_funcs or {}):
+                    app_state.tool_funcs = app_state.tool_funcs or {}
+                    app_state.tool_funcs[name] = func
 
-        if _t:
-            metrics.tools_loaded.set(len(_t))
-    return _t
-
-
-def tool_functions():
-    global _tf
-    if _tf is None:
-        tools()
-    return _tf
+        if app_state.tools:
+            metrics.tools_loaded.set(len(app_state.tools))
+    return app_state.tools
 
 
-def call_tool(n, a):
-    global _tf
-    if _tf is None:
-        tools()
-    if _tf and n in _tf:
+def tool_functions(app_state=None):
+    global _module_tool_funcs
+    
+    if app_state is None:
+        # Use module-level cache for backward compatibility
+        if _module_tool_funcs is None:
+            tools()  # This will populate _module_tool_funcs
+        return _module_tool_funcs or {}
+    
+    if app_state.tool_funcs is None:
+        tools(app_state)
+    return app_state.tool_funcs
+
+
+async def call_tool(n, a, app_state=None):
+    # For backward compatibility with tests that don't pass app_state
+    if app_state is None:
+        # Use module-level cache
+        global _module_tool_funcs
+        if _module_tool_funcs is None:
+            tools()
+        tool_funcs = _module_tool_funcs or {}
+    else:
+        if app_state.tool_funcs is None:
+            tools(app_state)
+        tool_funcs = app_state.tool_funcs
+    
+    if tool_funcs and n in tool_funcs:
         try:
             from tools.tool_validator import validate_tool_call
 
@@ -252,20 +291,30 @@ def call_tool(n, a):
             log.error("tool_validation_error", tool=n, error=str(e))
             return {"error": f"Validation failed: {str(e)}", "success": False, "tool": n}
         try:
-            return _tf[n](**a)
+            func = tool_funcs[n]
+            import inspect
+            if inspect.iscoroutinefunction(func):
+                return await func(**a)
+            return func(**a)
         except Exception as e:
             log.error("tool_execution_error", tool=n, error=str(e))
             return {"error": str(e), "success": False, "tool": n}
     return {"error": f"Tool {n} not found", "success": False}
 
 
+def call_tool_sync(n, a):
+    """Sync wrapper for call_tool (for use in tests)."""
+    return asyncio.run(call_tool(n, a, None))
+
+
 def _auth(a):
-    if not KEY and not ALLOWED_API_KEYS:
+    api_key = settings.api_key
+    if not api_key and not settings.allowed_api_keys:
         return False
-    if ALLOWED_API_KEYS:
+    if settings.allowed_api_keys:
         key = a.replace("Bearer ", "") if a else ""
-        return key not in ALLOWED_API_KEYS
-    return a != f"Bearer {KEY}" and a != KEY
+        return key not in settings.allowed_api_keys
+    return a != f"Bearer {api_key}" and a != api_key
 
 
 def _dedupe(client, server):
@@ -274,14 +323,14 @@ def _dedupe(client, server):
 
 
 @app.get("/health")
-def _h():
+def _h(request: Request):
     return {
         "status": "ok",
-        "workspace": str(WS),
+        "workspace": str(settings.workspace),
         "version": "0.1.0",
-        "tools_loaded": len(tools()) if tools() else 0,
-        "session_enabled": SESSION_ENABLED,
-        "stateless_mode": STATELESS_MODE,
+        "tools_loaded": len(tools(request.app.state)) if tools(request.app.state) else 0,
+        "session_enabled": settings.session_enabled,
+        "stateless_mode": settings.stateless_mode,
     }
 
 
@@ -289,10 +338,13 @@ def _h():
 async def _list_sessions(a=Header(None)):
     if _auth(a):
         raise HTTPException(401, "Invalid API key")
-    if not SESSION_ENABLED or STATELESS_MODE:
+    if not settings.session_enabled or settings.stateless_mode:
         raise HTTPException(404, "Session management not available")
 
-    sm = get_session_manager(storage_dir=SESSION_STORAGE_PATH, token_budget=SESSION_TOKEN_BUDGET)
+    sm = get_global_session_manager(
+        storage_dir=settings.session_storage_path_resolved,
+        token_budget=settings.session_token_budget,
+    )
     sessions = []
     for path in sm.storage_dir.glob("*.json"):
         try:
@@ -314,10 +366,13 @@ async def _list_sessions(a=Header(None)):
 async def _delete_session(session_id, a=Header(None)):
     if _auth(a):
         raise HTTPException(401, "Invalid API key")
-    if not SESSION_ENABLED or STATELESS_MODE:
+    if not settings.session_enabled or settings.stateless_mode:
         raise HTTPException(404, "Session management not available")
 
-    sm = get_session_manager(storage_dir=SESSION_STORAGE_PATH, token_budget=SESSION_TOKEN_BUDGET)
+    sm = get_global_session_manager(
+        storage_dir=settings.session_storage_path_resolved,
+        token_budget=settings.session_token_budget,
+    )
     path = sm._get_session_path(session_id)
     if path.exists():
         path.unlink()
@@ -337,9 +392,9 @@ async def _list_agents(a=Header(None)):
     from agents.registry import get_agent_registry
 
     registry = get_agent_registry(
-        workspace=WS,
-        max_agents=SUBAGENT_MAX_AGENTS,
-        max_depth=SUBAGENT_MAX_DEPTH,
+        workspace=settings.workspace,
+        max_agents=settings.subagent_max_agents,
+        max_depth=settings.subagent_max_depth,
     )
 
     parent_id = None
@@ -501,28 +556,31 @@ async def websocket_chat(websocket: WebSocket):
                 continue
 
             messages = [
-                {"role": "system", "content": SYSTEM_PROMPT + ("\n\n" + md() if md() else "")}
+                {
+                    "role": "system",
+                    "content": settings.system_prompt + ("\n\n" + md() if md() else ""),
+                }
             ] + messages
 
-            p = {
-                "model": OLLAMA_MODEL,
-                "messages": messages,
-                "stream": False,
-            }
+            request_data = ChatCompletionRequest(
+                model=settings.model,
+                messages=[Message(**m) for m in messages],
+                stream=False,
+            )
 
-            if t := tools():
-                p["tools"] = t
+            if t := tools(request.app.state):
+                request_data.tools = t
 
             u, h = (
-                f"{UP.rstrip('/')}/v1/chat/completions",
+                f"{request.app.state.upstream.rstrip('/')}/v1/chat/completions",
                 {
-                    "Authorization": f"Bearer {KEY}" if KEY else "",
+                    "Authorization": f"Bearer {request.app.state.api_key}" if request.app.state.api_key else "",
                     "Content-Type": "application/json",
                 },
             )
 
             try:
-                x = await http.post(u, json=p, headers=h)
+                x = await request.app.state.http_client.post(u, json=request_data.dict(), headers=h)
                 if x.status_code >= 400:
                     await websocket.send_json({"error": f"Upstream error: {x.status_code}"})
                     continue
@@ -551,20 +609,27 @@ async def _ic(a=Header(None)):
 
 @app.get("/md/{f}")
 async def _gf(f, a=Header(None)):
-    if _auth(a) or f not in MDS:
+    if _auth(a) or f not in settings.mds:
         raise HTTPException(401 if _auth(a) else 404)
-    return {"filename": f, "content": (WS / f).read_text() if (WS / f).exists() else ""}
+    return {
+        "filename": f,
+        "content": (settings.workspace / f).read_text()
+        if (settings.workspace / f).exists()
+        else "",
+    }
 
 
 @app.put("/md/{f}")
 async def _pf(f, r: Request, a=Header(None)):
-    if _auth(a) or f not in MDS:
+    if _auth(a) or f not in settings.mds:
         raise HTTPException(401 if _auth(a) else 404)
     b = await r.body()
-    if len(b) > MAX_PAYLOAD_SIZE:
-        return _create_error_response("File too large", 413, {"max_size": MAX_PAYLOAD_SIZE})
-    WS.mkdir(parents=True, exist_ok=True)
-    (WS / f).write_bytes(b)
+    if len(b) > settings.max_payload_size:
+        return _create_error_response(
+            "File too large", 413, {"max_size": settings.max_payload_size}
+        )
+    settings.workspace.mkdir(parents=True, exist_ok=True)
+    (settings.workspace / f).write_bytes(b)
     return {"status": "saved"}
 
 
@@ -609,9 +674,9 @@ async def chat(request: Request, a=Header(None)):
             )
 
     try:
-        if CHECK_UPSTREAM:
+        if request.app.state.check_upstream:
             try:
-                health_resp = await http.get(f"{UP.rstrip('/')}/api/tags", timeout=5)
+                health_resp = await request.app.state.http_client.get(f"{request.app.state.upstream.rstrip('/')}/api/tags", timeout=5)
                 if health_resp.status_code >= 400:
                     return _create_error_response(
                         "Upstream unhealthy", 503, {"upstream_status": health_resp.status_code}
@@ -623,43 +688,47 @@ async def chat(request: Request, a=Header(None)):
                 return _create_error_response("Upstream unreachable", 503, {"error": str(e)})
 
         try:
-            p = await request.json()
+            request_data_json = await request.json()
+            request_data = ChatCompletionRequest(**request_data_json)
         except json.JSONDecodeError as e:
             return _create_error_response("Invalid JSON in request", 400, {"error": str(e)})
-
-        if "messages" not in p:
-            return _create_error_response("messages required", 400)
+        except Exception as e:
+            return _create_error_response(
+                f"Invalid request format: {str(e)}", 400, {"error": str(e)}
+            )
 
         session_history = []
 
         agent_mode = request.headers.get("X-Agent-Mode", "").lower()
-        stateless_mode = agent_mode == "stateless" or STATELESS_MODE
+        stateless_mode = agent_mode == "stateless" or settings.stateless_mode
 
-        if SESSION_ENABLED and not stateless_mode:
+        if settings.session_enabled and not stateless_mode:
             session_id = request.headers.get("X-Session-ID")
             if not session_id:
                 client_ip = request.client.host if request.client else ""
                 user_agent = request.headers.get("user-agent", "")
-                sm = get_session_manager(
-                    storage_dir=SESSION_STORAGE_PATH,
-                    token_budget=SESSION_TOKEN_BUDGET,
+                sm = get_global_session_manager(
+                    storage_dir=settings.session_storage_path_resolved,
+                    token_budget=settings.session_token_budget,
                 )
                 session_id = sm.generate_session_id(ip=client_ip, user_agent=user_agent)
 
-            sm = get_session_manager(
-                storage_dir=SESSION_STORAGE_PATH,
-                token_budget=SESSION_TOKEN_BUDGET,
+            sm = get_global_session_manager(
+                storage_dir=settings.session_storage_path_resolved,
+                token_budget=settings.session_token_budget,
             )
             session_history = sm.load_session(session_id)
 
-        log.info("chat_request", model=OLLAMA_MODEL, messages_count=len(p.get("messages", [])))
+        log.info("chat_request", model=settings.model, messages_count=len(request_data.messages))
 
-        p["model"] = OLLAMA_MODEL or None
+        # Set the model from settings if not provided
+        if not request_data.model:
+            request_data.model = settings.model
 
         incoming_messages = [
-            {"role": x["role"], "content": x["content"]}
-            for x in p.get("messages", [])
-            if x.get("role") != "system"
+            {"role": msg.role, "content": msg.content}
+            for msg in request_data.messages
+            if msg.role != "system"
         ]
 
         user_message = ""
@@ -667,19 +736,19 @@ async def chat(request: Request, a=Header(None)):
             last_msg = incoming_messages[-1]
             user_message = last_msg.get("content", "")
 
-        cb = get_context_builder(workspace=WS)
+        cb = get_context_builder(workspace=settings.workspace)
 
         system_content = cb.build_system_prompt(
-            base_prompt=SYSTEM_PROMPT,
+            base_prompt=settings.system_prompt,
             include_identity=True,
             include_personality=True,
             include_user=True,
-            include_memories=ENABLE_SELECTIVE_MEMORY,
+            include_memories=settings.enable_selective_memory,
             query=user_message,
         )
 
         if session_history:
-            available = SESSION_TOKEN_BUDGET - 2000
+            available = settings.session_token_budget - 2000
             from token_budget import estimate_tokens, truncate_messages
 
             reserved = estimate_tokens(system_content)
@@ -687,40 +756,42 @@ async def chat(request: Request, a=Header(None)):
 
             truncated_history = truncate_messages(session_history, available_for_history)
 
-            p["messages"] = (
-                [{"role": "system", "content": system_content}]
-                + truncated_history
-                + incoming_messages
+            request_data.messages = (
+                [Message(role="system", content=system_content)]
+                + [Message(**m) for m in truncated_history]
+                + [Message(**m) for m in incoming_messages]
             )
         else:
-            p["messages"] = [{"role": "system", "content": system_content}] + incoming_messages
+            request_data.messages = [Message(role="system", content=system_content)] + [
+                Message(**m) for m in incoming_messages
+            ]
 
-        all_tools = tools()
+        all_tools = tools(request.app.state)
         if all_tools:
-            if ENABLE_DYNAMIC_TOOLS:
+            if settings.enable_dynamic_tools:
                 selected_tools = cb.select_tools(
                     all_tools=all_tools,
                     query=user_message,
                     conversation_history=session_history,
-                    max_tools=MAX_TOOLS,
+                    max_tools=settings.max_tools,
                 )
-                p["tools"] = _dedupe(p.get("tools", []), selected_tools)
+                request_data.tools = _dedupe(request_data.tools or [], selected_tools)
             else:
-                p["tools"] = _dedupe(p.get("tools", []), all_tools)
+                request_data.tools = _dedupe(request_data.tools or [], all_tools)
 
         u, h = (
-            f"{UP.rstrip('/')}/v1/chat/completions",
+            f"{request.app.state.upstream.rstrip('/')}/v1/chat/completions",
             {
-                "Authorization": f"Bearer {KEY}" if KEY else "",
+                "Authorization": f"Bearer {request.app.state.api_key}" if request.app.state.api_key else "",
                 "Content-Type": "application/json",
             },
         )
 
-        if p.get("stream"):
+        if request_data.stream:
 
             async def g():
                 try:
-                    async with http.stream("POST", u, json=p, headers=h) as x:
+                    async with request.app.state.http_client.stream("POST", u, json=request_data.dict(), headers=h) as x:
                         if x.status_code >= 400:
                             yield f'{{"error":"Upstream {x.status_code}"}}\n'
                             return
@@ -734,18 +805,18 @@ async def chat(request: Request, a=Header(None)):
             return StreamingResponse(g(), media_type="text/event-stream")
 
         planning_agent = get_planning_agent(
-            enable_planning=ENABLE_PLANNING,
-            enable_reflection=ENABLE_REFLECTION,
+            enable_planning=settings.enable_planning,
+            enable_reflection=settings.enable_reflection,
         )
         error_formatter = ErrorFormatter()
 
-        if ENABLE_PLANNING:
-            system_msg = p["messages"][0]
-            system_msg["content"] = add_planning_to_system_prompt(system_msg.get("content", ""))
+        if settings.enable_planning:
+            system_msg = request_data.messages[0]
+            system_msg.content = add_planning_to_system_prompt(system_msg.content or "")
 
         tc = 0
-        while tc < MAX_TOOL_CALLS:
-            x = await http.post(u, json=p, headers=h)
+        while tc < settings.max_tool_calls:
+            x = await request.app.state.http_client.post(u, json=request_data.dict(), headers=h)
             if x.status_code >= 400:
                 log.error("upstream_error", status_code=x.status_code)
                 return _create_error_response(
@@ -765,19 +836,19 @@ async def chat(request: Request, a=Header(None)):
                 R["choices"][0]["message"]["content"] = content
                 log.info("chat_response", tool_calls=0)
 
-                if SESSION_ENABLED and not stateless_mode and session_id:
-                    sm = get_session_manager(
-                        storage_dir=SESSION_STORAGE_PATH,
-                        token_budget=SESSION_TOKEN_BUDGET,
+                if settings.session_enabled and not stateless_mode and session_id:
+                    sm = get_global_session_manager(
+                        storage_dir=settings.session_storage_path_resolved,
+                        token_budget=settings.session_token_budget,
                     )
-                    for msg in p["messages"]:
-                        if msg.get("role") not in ("system",):
-                            session_history.append(msg)
+                    for msg in request_data.messages:
+                        if msg.role not in ("system",):
+                            session_history.append(msg.dict())
                     session_history.append({"role": "assistant", "content": content})
                     sm.save_session(session_id, session_history)
 
                 return R
-            p["messages"].append(m)
+            request_data.messages.append(Message(**m))
             for t_ in ts:
                 fn, ag = t_["function"]["name"], t_["function"]["arguments"]
                 args = json.loads(ag) if isinstance(ag, str) else ag
@@ -785,31 +856,31 @@ async def chat(request: Request, a=Header(None)):
                 tool_result = None
                 error_msg = None
 
-                for attempt in range(TOOL_MAX_RETRIES + 1):
+                for attempt in range(settings.tool_max_retries + 1):
                     try:
-                        tool_result = call_tool(fn, args)
+                        tool_result = await call_tool(fn, args, request.app.state)
 
                         if isinstance(tool_result, dict) and tool_result.get("error"):
                             error_msg = tool_result.get("error", "Unknown error")
-                            if attempt < TOOL_MAX_RETRIES:
+                            if attempt < settings.tool_max_retries:
                                 log.warning("tool_retry", tool=fn, attempt=attempt, error=error_msg)
                                 formatted_error = error_formatter.format_tool_error(
                                     fn, error_msg, args
                                 )
-                                p["messages"].append(
-                                    {"role": "tool", "name": fn, "content": formatted_error}
+                                request_data.messages.append(
+                                    Message(role="tool", name=fn, content=formatted_error)
                                 )
                                 continue
                         else:
                             break
                     except Exception as e:
                         error_msg = str(e)
-                        if attempt < TOOL_MAX_RETRIES:
+                        if attempt < settings.tool_max_retries:
                             log.warning(
                                 "tool_error_retry", tool=fn, attempt=attempt, error=error_msg
                             )
                             formatted_error = error_formatter.format_tool_error(fn, error_msg, args)
-                            p["messages"].append(
+                            request_data.messages.append(
                                 {"role": "tool", "name": fn, "content": formatted_error}
                             )
                             continue
@@ -818,19 +889,21 @@ async def chat(request: Request, a=Header(None)):
 
                 result_str = str(tool_result) if tool_result else ""
 
-                if ENABLE_REFLECTION and planning_agent.should_reflect(result_str):
+                if settings.enable_reflection and planning_agent.should_reflect(result_str):
                     reflection = planning_agent.create_reflection(fn, args, result_str)
-                    p["messages"].append({"role": "user", "content": reflection})
+                    request_data.messages.append(Message(role="user", content=reflection))
 
                 log.info("tool_call", tool=fn, arguments=ag)
-                p["messages"].append({"role": "tool", "name": fn, "content": result_str})
-                if SESSION_ENABLED and not STATELESS_MODE and session_id:
+                request_data.messages.append(Message(role="tool", name=fn, content=result_str))
+                if settings.session_enabled and not settings.stateless_mode and session_id:
                     session_history.append(m)
                     session_history.append({"role": "tool", "name": fn, "content": result_str})
             tc += 1
-        log.warning("max_tool_calls_reached", max_calls=MAX_TOOL_CALLS)
+        log.warning("max_tool_calls_reached", max_calls=settings.max_tool_calls)
         return _create_error_response(
-            f"Max tool calls ({MAX_TOOL_CALLS}) reached", 400, {"max_calls": MAX_TOOL_CALLS}
+            f"Max tool calls ({settings.max_tool_calls}) reached",
+            400,
+            {"max_calls": settings.max_tool_calls},
         )
     except json.JSONDecodeError as e:
         return _create_error_response("Invalid JSON in request", 400, {"error": str(e)})
@@ -840,9 +913,15 @@ async def chat(request: Request, a=Header(None)):
 
 
 if __name__ == "__main__":
-    WS.mkdir(parents=True, exist_ok=True)
-    for f in MDS:
-        if not (WS / f).exists():
-            (WS / f).write_text(f"# {f[:-3]}\n")
-    log.info("myclaw_starting", workspace=str(WS), upstream=UP, host=MYCLAW_HOST, port=MYCLAW_PORT)
-    uvicorn.run(app, host=MYCLAW_HOST, port=MYCLAW_PORT)
+    settings.workspace.mkdir(parents=True, exist_ok=True)
+    for f in settings.mds:
+        if not (settings.workspace / f).exists():
+            (settings.workspace / f).write_text(f"# {f[:-3]}\n")
+    log.info(
+        "myclaw_starting",
+        workspace=str(settings.workspace),
+        upstream=request.app.state.upstream,
+        host=settings.host,
+        port=settings.port,
+    )
+    uvicorn.run(app, host=settings.host, port=settings.port)

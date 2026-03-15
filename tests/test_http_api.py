@@ -10,6 +10,9 @@ from httpx import Response
 @pytest.fixture
 def mock_ollama():
     """Mock the upstream Ollama API."""
+    from myclaw import app
+    import httpx
+    
     mock_http = AsyncMock()
     mock_response = Response(
         200,
@@ -27,9 +30,26 @@ def mock_ollama():
     mock_http.get = AsyncMock(return_value=Response(200, json={"models": []}))
     mock_http.post = AsyncMock(return_value=mock_response)
     mock_http.stream = AsyncMock()
-
-    with patch("myclaw.http", mock_http):
+    
+    # Initialize app.state attributes if they don't exist
+    if not hasattr(app.state, 'http_client'):
+        app.state.http_client = mock_http
+    if not hasattr(app.state, 'check_upstream'):
+        app.state.check_upstream = False
+    if not hasattr(app.state, 'upstream'):
+        app.state.upstream = "http://localhost:11434"
+    if not hasattr(app.state, 'api_key'):
+        app.state.api_key = ""
+    
+    # Store original and replace with mock
+    original_http = app.state.http_client
+    app.state.http_client = mock_http
+    
+    try:
         yield mock_http
+    finally:
+        # Restore original
+        app.state.http_client = original_http
 
 
 @pytest.fixture
@@ -37,7 +57,12 @@ def client(mock_ollama):
     """Create a test client for the FastAPI app."""
     from myclaw import app
 
+    # Store the mock http_client from mock_ollama
+    mock_http = mock_ollama
+    
     with TestClient(app=app) as test_client:
+        # Ensure the mock is still in place after TestClient creation
+        app.state.http_client = mock_http
         yield test_client
 
 
@@ -77,21 +102,21 @@ class TestMarkdownEndpoints:
 
     def test_get_md_works(self, client, workspace_files):
         """Test GET /md/{f} works (auth bypassed when no keys configured)."""
-        with patch("myclaw.WS", workspace_files):
+        with patch("config.settings.workspace", workspace_files):
             response = client.get("/md/SOUL.md")
             assert response.status_code == 200
 
     def test_get_md_not_found_forbidden(self, client, workspace_files):
         """Test GET /md/{f} returns 404 for non-allowed files."""
-        with patch("myclaw.WS", workspace_files):
-            with patch("myclaw.MDS", []):
+        with patch("config.settings.workspace", workspace_files):
+            with patch("config.settings.mds", []):
                 response = client.get("/md/SOUL.md", headers={"Authorization": "Bearer test-key"})
                 assert response.status_code == 404
 
     def test_get_md_success(self, client, workspace_files):
         """Test GET /md/{f} returns file content."""
-        with patch("myclaw.WS", workspace_files):
-            with patch("myclaw.MDS", ["SOUL.md", "PERSONALITY.md"]):
+        with patch("config.settings.workspace", workspace_files):
+            with patch("config.settings.mds", ["SOUL.md", "PERSONALITY.md"]):
                 response = client.get("/md/SOUL.md", headers={"Authorization": "Bearer test-key"})
                 assert response.status_code == 200
                 data = response.json()
@@ -100,15 +125,15 @@ class TestMarkdownEndpoints:
 
     def test_put_md_works(self, client, workspace_files):
         """Test PUT /md/{f} works (auth bypassed when no keys configured)."""
-        with patch("myclaw.WS", workspace_files):
+        with patch("config.settings.workspace", workspace_files):
             response = client.put("/md/SOUL.md", content="New content")
             assert response.status_code == 200
 
     def test_put_md_file_too_large(self, client, workspace_files):
         """Test PUT /md/{f} returns 413 for large files."""
-        with patch("myclaw.WS", workspace_files):
-            with patch("myclaw.MDS", ["SOUL.md"]):
-                with patch("myclaw.MAX_PAYLOAD_SIZE", 10):
+        with patch("config.settings.workspace", workspace_files):
+            with patch("config.settings.mds", ["SOUL.md"]):
+                with patch("config.settings.max_payload_size", 10):
                     response = client.put(
                         "/md/SOUL.md",
                         content="This is way too long content",
@@ -220,7 +245,7 @@ class TestToolCalls:
             },
         )
 
-        with patch("myclaw.MAX_TOOL_CALLS", 2):
+        with patch("config.settings.max_tool_calls", 2):
             response = client.post(
                 "/v1/chat/completions",
                 json={"messages": [{"role": "user", "content": "What time is it?"}]},
@@ -241,7 +266,7 @@ class TestUpstreamErrors:
 
         mock_ollama.get.side_effect = httpx.ConnectError("Connection failed")
 
-        with patch("myclaw.CHECK_UPSTREAM", True):
+        with patch("myclaw.app.state.check_upstream", True):
             response = client.post(
                 "/v1/chat/completions",
                 json={"messages": [{"role": "user", "content": "Hello"}]},

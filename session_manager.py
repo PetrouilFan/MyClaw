@@ -136,9 +136,9 @@ def get_session_manager(
 
     if _session_manager is None:
         if storage_dir is None:
-            from settings import WS
+            from config import settings
 
-            storage_dir = WS / "sessions"
+            storage_dir = settings.workspace / "sessions"
 
         _session_manager = SessionManager(
             storage_dir=storage_dir,
