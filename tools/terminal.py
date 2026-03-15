@@ -38,7 +38,9 @@ _truncate_counter: dict[str, int] = {}
 terminal_logger = logging.getLogger("myclaw.terminal")
 
 
-def _log_audit(command: str, action: str, result: str = None, details: dict = None):
+def _log_audit(
+    command: str, action: str, result: Optional[str] = None, details: Optional[dict] = None
+) -> None:
     """Log terminal command execution for audit purposes."""
     log_entry = {
         "timestamp": datetime.now().isoformat(),
@@ -156,7 +158,7 @@ async def run_command(
         env=full_env,
     )
 
-    proc_info = {
+    proc_info: dict[str, Any] = {
         "pid": process.pid,
         "command": command,
         "output_file": output_path,
@@ -171,7 +173,7 @@ async def run_command(
     _processes[process.pid] = proc_info
     _truncate_counter[output_path] = 0
 
-    async def stream_output():
+    async def stream_output() -> None:
         try:
             if process.stdout:
                 while True:
@@ -203,7 +205,7 @@ async def run_command(
             _log_audit(
                 command,
                 "EXECUTED",
-                proc_info["status"],
+                str(proc_info["status"]),
                 {"return_code": return_code, "pid": process.pid},
             )
             if on_complete:
@@ -343,7 +345,7 @@ def run_terminal_command(
 
         result: dict = {}
 
-        def run():
+        def run() -> None:
             nonlocal result
             result = _get_loop().run_until_complete(
                 run_command(
@@ -396,7 +398,7 @@ def wait_terminal_command(process_id: int, timeout: Optional[float] = None) -> d
 
         result: dict = {}
 
-        def run():
+        def run() -> None:
             nonlocal result
             result = _get_loop().run_until_complete(
                 wait_command(process_id=process_id, timeout=timeout)
@@ -423,7 +425,7 @@ def kill_terminal_command(process_id: int) -> dict:
 
         result: dict = {}
 
-        def run():
+        def run() -> None:
             nonlocal result
             result = _get_loop().run_until_complete(kill_command(process_id=process_id))
 
