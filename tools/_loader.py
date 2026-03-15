@@ -34,21 +34,30 @@ def load_tools(
 
     dirs = [d for d in (project_root, workspace) if d]
     for d in dirs:
-        if d == _td and _t is not None:
+        if d == _td and _t is not None and _tf is not None:
             return _t, _tf
 
         tools_file = d / "tools.py"
         if tools_file.exists():
             try:
-                module = importlib.util.module_from_spec(
-                    spec := importlib.util.spec_from_file_location("t", tools_file)
-                )
+                spec = importlib.util.spec_from_file_location("t", tools_file)
+                if spec is None or spec.loader is None:
+                    continue
+                module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
-                _tf, _t, _td = (
-                    getattr(module, "TOOL_FUNCTIONS", {}),
-                    getattr(module, "TOOLS", []),
-                    d,
-                )
+                _tf_val = getattr(module, "TOOL_FUNCTIONS", None)
+                _t_val = getattr(module, "TOOLS", None)
+                # Ensure values are not None
+                if _tf_val is None:
+                    _tf_val = {}
+                if _t_val is None:
+                    _t_val = []
+                # Explicitly assert non-None for mypy
+                assert _tf_val is not None
+                assert _t_val is not None
+                _tf = _tf_val
+                _t = _t_val
+                _td = d
                 return _t, _tf
             except Exception:
                 pass
