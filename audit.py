@@ -76,13 +76,13 @@ class AuditLogger:
         event_type: AuditEventType,
         action: str,
         level: AuditLevel = AuditLevel.INFO,
-        actor: str = None,
-        target: str = None,
-        details: dict = None,
+        actor: Optional[str] = None,
+        target: Optional[str] = None,
+        details: Optional[dict] = None,
         success: bool = True,
-        duration_ms: int = None,
-        ip_address: str = None,
-        user_agent: str = None,
+        duration_ms: Optional[int] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
     ) -> str:
         """Log an audit event.
 
@@ -137,8 +137,8 @@ class AuditLogger:
         arguments: dict,
         result: Any,
         success: bool,
-        duration_ms: int = None,
-        actor: str = None,
+        duration_ms: Optional[int] = None,
+        actor: Optional[str] = None,
     ) -> str:
         """Log tool execution."""
         return self.log(
@@ -159,8 +159,8 @@ class AuditLogger:
         self,
         agent_id: str,
         agent_name: str,
-        parent_id: str = None,
-        metadata: dict = None,
+        parent_id: Optional[str] = None,
+        metadata: Optional[dict] = None,
     ) -> str:
         """Log agent spawn."""
         return self.log(
@@ -175,8 +175,8 @@ class AuditLogger:
     def log_agent_terminate(
         self,
         agent_id: str,
-        reason: str = None,
-        duration_ms: int = None,
+        reason: Optional[str] = None,
+        duration_ms: Optional[int] = None,
     ) -> str:
         """Log agent termination."""
         return self.log(
@@ -193,9 +193,9 @@ class AuditLogger:
         endpoint: str,
         method: str,
         status_code: int,
-        duration_ms: int = None,
-        ip_address: str = None,
-        user_agent: str = None,
+        duration_ms: Optional[int] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
     ) -> str:
         """Log API request."""
         level = AuditLevel.INFO if status_code < 400 else AuditLevel.ERROR
@@ -212,8 +212,8 @@ class AuditLogger:
     def log_auth_failure(
         self,
         reason: str,
-        ip_address: str = None,
-        user_agent: str = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
     ) -> str:
         """Log authentication failure."""
         return self.log(
@@ -228,11 +228,11 @@ class AuditLogger:
 
     def query(
         self,
-        event_type: AuditEventType = None,
-        start_date: str = None,
-        end_date: str = None,
-        actor: str = None,
-        target: str = None,
+        event_type: Optional[AuditEventType] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        actor: Optional[str] = None,
+        target: Optional[str] = None,
         limit: int = 100,
     ) -> list[AuditEvent]:
         """Query audit events."""
@@ -304,7 +304,7 @@ class AuditLogger:
 _audit_logger: Optional[AuditLogger] = None
 
 
-def get_audit_logger(workspace: Path = None) -> AuditLogger:
+def get_audit_logger(workspace: Optional[Path] = None) -> AuditLogger:
     """Get or create the audit logger."""
     global _audit_logger
 
