@@ -66,7 +66,7 @@ class ResponseCache:
             self._hits += 1
             return entry.value
 
-    def set(self, key: str, value: Any, ttl: int = None) -> None:
+    def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
         """Set value in cache."""
         with self._lock:
             if len(self._cache) >= self.max_entries:
@@ -152,7 +152,7 @@ def get_cache(
 def cache_response(
     key_data: dict,
     response: Any,
-    ttl: int = None,
+    ttl: Optional[int] = None,
 ) -> None:
     """Cache a response."""
     cache = get_cache()
@@ -167,7 +167,7 @@ def get_cached_response(key_data: dict) -> Optional[Any]:
     return cache.get(key)
 
 
-def invalidate_cache(pattern: str = None) -> int:
+def invalidate_cache(pattern: Optional[str] = None) -> int:
     """Invalidate cache entries."""
     cache = get_cache()
     if pattern:
