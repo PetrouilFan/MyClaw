@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from rich.console import Console
 from rich.logging import RichHandler
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
 LOGS_DIR = PROJECT_ROOT / "logs"
@@ -44,7 +45,7 @@ DEFAULT_CHANNELS = [
 ]
 
 
-def rotate_logs():
+def rotate_logs() -> None:
     """Rotate logs: keep last 2 logs (current + 1 backup)."""
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -61,7 +62,7 @@ def rotate_logs():
         pass
 
 
-def setup_logging(level: str = "INFO"):
+def setup_logging(level: str = "INFO") -> None:
     """Configure centralized logging with rich console output."""
     log_level = getattr(logging, level.upper())
 
@@ -141,9 +142,7 @@ class ProcessManager:
     def start_all(self, enabled_only: bool = True) -> bool:
         """Start all enabled channels in order (myclaw first)."""
         to_start = (
-            [ch for ch in DEFAULT_CHANNELS if ch.enabled]
-            if enabled_only
-            else DEFAULT_CHANNELS
+            [ch for ch in DEFAULT_CHANNELS if ch.enabled] if enabled_only else DEFAULT_CHANNELS
         )
 
         myclaw_ch = next((ch for ch in to_start if ch.name == "myclaw"), None)
@@ -151,9 +150,7 @@ class ProcessManager:
 
         if myclaw_ch:
             if not self.start_channel(myclaw_ch):
-                self.logger.error(
-                    "Failed to start myclaw, channels may not work properly"
-                )
+                self.logger.error("Failed to start myclaw, channels may not work properly")
                 return False
             time.sleep(2)
 
@@ -164,13 +161,13 @@ class ProcessManager:
         self.save_pids()
         return True
 
-    def stop_all(self):
+    def stop_all(self) -> None:
         """Stop all running processes."""
         for name in list(self.processes.keys()):
             self.stop_channel(name)
         self.save_pids()
 
-    def save_pids(self):
+    def save_pids(self) -> None:
         """Save process PIDs to file."""
         with open(PID_FILE, "w") as f:
             for name, proc in self.processes.items():
@@ -183,7 +180,7 @@ class ProcessManager:
             status[name] = "running" if proc.poll() is None else "dead"
         return status
 
-    def monitor_loop(self, check_interval: int = 5):
+    def monitor_loop(self, check_interval: int = 5) -> None:
         """Monitor processes and auto-restart on crash."""
         self.logger.info("Entering monitor mode...")
 
@@ -198,7 +195,7 @@ class ProcessManager:
             time.sleep(check_interval)
 
 
-def list_channels():
+def list_channels() -> None:
     """List all available channels."""
     print("Available channels:")
     for ch in DEFAULT_CHANNELS:
@@ -206,7 +203,7 @@ def list_channels():
         print(f"  - {ch.name}: {ch.script} [{status}]")
 
 
-def stop_via_pid():
+def stop_via_pid() -> None:
     """Stop processes using PID file."""
     if not PID_FILE.exists():
         print("No PID file found, nothing to stop")
@@ -228,7 +225,7 @@ def stop_via_pid():
     print("Stop signal sent to all processes")
 
 
-def show_status(manager: ProcessManager):
+def show_status(manager: ProcessManager) -> None:
     """Show status of all processes."""
     status = manager.get_status()
     if not status:
@@ -240,18 +237,12 @@ def show_status(manager: ProcessManager):
         print(f"  - {name}: {state}")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="MyClaw Launcher")
     parser.add_argument("--list", action="store_true", help="List available channels")
-    parser.add_argument(
-        "--no-channels", action="store_true", help="Skip starting channel bots"
-    )
-    parser.add_argument(
-        "--channel", action="append", help="Enable a specific channel (can repeat)"
-    )
-    parser.add_argument(
-        "--exclude", action="append", help="Exclude a channel (can repeat)"
-    )
+    parser.add_argument("--no-channels", action="store_true", help="Skip starting channel bots")
+    parser.add_argument("--channel", action="append", help="Enable a specific channel (can repeat)")
+    parser.add_argument("--exclude", action="append", help="Exclude a channel (can repeat)")
     parser.add_argument(
         "--monitor",
         action="store_true",
@@ -260,12 +251,8 @@ def main():
     parser.add_argument(
         "--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"]
     )
-    parser.add_argument(
-        "--stop", action="store_true", help="Stop all running processes"
-    )
-    parser.add_argument(
-        "--status", action="store_true", help="Show status of all processes"
-    )
+    parser.add_argument("--stop", action="store_true", help="Stop all running processes")
+    parser.add_argument("--status", action="store_true", help="Show status of all processes")
 
     args = parser.parse_args()
 
@@ -309,7 +296,7 @@ def main():
         logger.error("Failed to start processes")
         sys.exit(1)
 
-    def signal_handler(signum, frame):
+    def signal_handler(signum: int, frame: Any) -> None:
         logger.info(f"Received signal {signum}, shutting down...")
         manager.stop_all()
         sys.exit(0)
