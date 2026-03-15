@@ -236,7 +236,7 @@ class ContextBuilder:
         self,
         all_tools: list[dict],
         query: str = "",
-        conversation_history: list[dict] = None,
+        conversation_history: Optional[list[dict]] = None,
         max_tools: int = 10,
     ) -> list[dict]:
         """Select relevant tools based on query and conversation context."""
@@ -284,7 +284,7 @@ class ContextBuilder:
             reverse=True,
         )
 
-        selected = []
+        selected: list[dict] = []
         for tool in sorted_tools:
             tool_name = (tool.get("function") or {}).get("name", "").lower()
             if scores.get(tool_name, 0) > 0 or len(selected) < 3:
@@ -302,7 +302,7 @@ _context_builder: Optional[ContextBuilder] = None
 
 
 def get_context_builder(
-    workspace: Path = None,
+    workspace: Optional[Path] = None,
     token_budget: int = 28000,
 ) -> ContextBuilder:
     """Get or create the global context builder instance."""
