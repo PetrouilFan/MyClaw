@@ -8,7 +8,7 @@ from typing import Optional
 
 log = logging.getLogger("myclaw.tool_validator")
 
-_TYPE_MAPPING = {
+_TYPE_MAPPING: dict[str, type | tuple[type, ...]] = {
     "string": str,
     "integer": int,
     "number": (int, float),
@@ -71,7 +71,7 @@ class ToolValidator:
             expected_type = param_schema.get("type", "string")
 
             python_type = _TYPE_MAPPING.get(expected_type)
-            if python_type and not isinstance(param_value, python_type):
+            if python_type is not None and not isinstance(param_value, python_type):
                 errors.append(
                     f"Parameter '{param_name}' should be {expected_type}, "
                     f"got {type(param_value).__name__}"
@@ -102,7 +102,7 @@ class ToolValidator:
 _validator: Optional[ToolValidator] = None
 
 
-def get_tool_validator(tool_schemas: list[dict] = None) -> ToolValidator:
+def get_tool_validator(tool_schemas: Optional[list[dict]] = None) -> ToolValidator:
     """Get or create the global tool validator."""
     global _validator
 
