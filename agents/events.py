@@ -18,7 +18,7 @@ class EventManager:
     Allows clients to subscribe to events from specific agents.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._subscribers: Dict[str, List[asyncio.Queue]] = defaultdict(list)
         self._global_subscribers: List[asyncio.Queue] = []
         self._lock = threading.RLock()
@@ -35,7 +35,7 @@ class EventManager:
             Queue that will receive events
         """
         with self._lock:
-            queue = asyncio.Queue(maxsize=100)
+            queue: asyncio.Queue = asyncio.Queue(maxsize=100)
             self._subscribers[agent_id].append(queue)
 
             for event in self._event_history.get(agent_id, [])[-10:]:
@@ -53,7 +53,7 @@ class EventManager:
             Queue that will receive all events
         """
         with self._lock:
-            queue = asyncio.Queue(maxsize=100)
+            queue: asyncio.Queue = asyncio.Queue(maxsize=100)
             self._global_subscribers.append(queue)
             return queue
 
