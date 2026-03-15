@@ -19,13 +19,14 @@ def extract_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
         List of tool call dicts in standardized format:
         [{"function": {"name": "...", "arguments": {...}}}, ...]
     """
-    tool_calls = message.get("tool_calls", [])
+    tool_calls_raw = message.get("tool_calls", [])
+    tool_calls: list[dict[str, Any]] = []
+    if isinstance(tool_calls_raw, list):
+        tool_calls = tool_calls_raw
     if tool_calls:
         return tool_calls
 
-    combined = (
-        (message.get("reasoning", "") or "") + "\n" + (message.get("content", "") or "")
-    )
+    combined = (message.get("reasoning", "") or "") + "\n" + (message.get("content", "") or "")
     matches: list[str] = []
 
     xml_matches = re.findall(r"<tool_call>(.*?)</tool_call>", combined, re.DOTALL)
@@ -38,9 +39,7 @@ def extract_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
         if m not in matches:
             matches.append(m)
 
-    json_like = re.findall(
-        r'\{[^}]*"name"\s*:\s*"[^"]+"[^}]*"arguments"\s*:\s*\{.*\}', combined
-    )
+    json_like = re.findall(r'\{[^}]*"name"\s*:\s*"[^"]+"[^}]*"arguments"\s*:\s*\{.*\}', combined)
     for m in json_like:
         if m not in matches:
             matches.append(m)
@@ -116,9 +115,7 @@ def clean_content(message: dict[str, Any]) -> str:
     cleaned = re.sub(r"</tool_call>\s*$", "", cleaned).strip()
 
     if cleaned.startswith("<tool_call>") or (
-        cleaned.startswith("{")
-        and '"name":' in cleaned[:60]
-        and '"arguments"' in cleaned
+        cleaned.startswith("{") and '"name":' in cleaned[:60] and '"arguments"' in cleaned
     ):
         return ""
 
