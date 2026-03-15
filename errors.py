@@ -8,7 +8,7 @@ import json
 import logging
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from pydantic import BaseModel
 
@@ -214,7 +214,7 @@ def categorize_error(error: Exception, context: dict = {}) -> ErrorDetail:
 
 
 async def retry_with_backoff(
-    func,
+    func: Callable[[], Any],
     max_retries: int = 3,
     base_delay: float = 1.0,
     max_delay: float = 60.0,
@@ -235,7 +235,7 @@ async def retry_with_backoff(
     Raises:
         Last exception if all retries fail
     """
-    last_error = None
+    last_error: Optional[Exception] = None
 
     for attempt in range(max_retries + 1):
         try:
@@ -266,13 +266,15 @@ async def retry_with_backoff(
             )
             await asyncio.sleep(delay)
 
-    raise last_error
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("No error to raise")
 
 
 _dlq: Optional[DeadLetterQueue] = None
 
 
-def get_dead_letter_queue(workspace: Path = None) -> DeadLetterQueue:
+def get_dead_letter_queue(workspace: Optional[Path] = None) -> DeadLetterQueue:
     """Get or create the dead letter queue."""
     global _dlq
 
