@@ -22,6 +22,7 @@ from fastapi import WebSocket
 from config import settings
 from api_models import ChatCompletionRequest, Message, ToolCall, FunctionCall
 from dependencies import get_tools, get_session_manager, get_agent_registry, get_http_client
+from services.tool_executor import ToolExecutor
 
 from agent_loop import (
     add_planning_to_system_prompt,
