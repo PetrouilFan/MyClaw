@@ -378,50 +378,50 @@ class TestAgentEndpoints:
 
     def test_list_agents_unavailable(self, client):
         """Test GET /agents returns 404 when agents unavailable."""
-        with patch("myclaw.AGENT_TOOLS_AVAILABLE", False):
+        with patch("config.settings.enable_agent_tools", False):
             response = client.get("/agents")
             assert response.status_code == 404
 
     def test_get_agent_404_missing(self, client):
         """Test GET /agents/{id} returns 404 for missing agent."""
-        with patch("myclaw.AGENT_TOOLS_AVAILABLE", False):
+        with patch("config.settings.enable_agent_tools", False):
             response = client.get("/agents/nonexistent")
             assert response.status_code == 404
 
     def test_terminate_agent_not_found(self, client):
         """Test DELETE /agents/{id} returns 404 when not found."""
-        with patch("myclaw.AGENT_TOOLS_AVAILABLE", True):
-            with patch("myclaw.get_agent_manager", new_callable=AsyncMock):
+        with patch("config.settings.enable_agent_tools", True):
+            with patch("agents.manager.get_agent_manager", new_callable=AsyncMock):
                 mock_manager = AsyncMock()
                 mock_manager.terminate_agent.return_value = False
-                with patch("myclaw.get_agent_manager", return_value=mock_manager):
+                with patch("agents.manager.get_agent_manager", return_value=mock_manager):
                     response = client.delete("/agents/nonexistent")
                     assert response.status_code == 404
 
     def test_spawn_agent_missing_task(self, client):
         """Test POST /agents/{id}/spawn returns 400 when task missing."""
-        with patch("myclaw.AGENT_TOOLS_AVAILABLE", True):
-            with patch("myclaw.get_agent_manager", new_callable=AsyncMock):
+        with patch("config.settings.enable_agent_tools", True):
+            with patch("agents.manager.get_agent_manager", new_callable=AsyncMock):
                 mock_manager = AsyncMock()
-                with patch("myclaw.get_agent_manager", return_value=mock_manager):
+                with patch("agents.manager.get_agent_manager", return_value=mock_manager):
                     response = client.post("/agents/main/spawn", json={})
                     assert response.status_code == 400
 
     def test_spawn_agent_unavailable(self, client):
         """Test POST /agents/{id}/spawn returns 404 when agents unavailable."""
-        with patch("myclaw.AGENT_TOOLS_AVAILABLE", False):
+        with patch("config.settings.enable_agent_tools", False):
             response = client.post("/agents/main/spawn", json={"task": "test"})
             assert response.status_code == 404
 
     def test_get_agent_messages_unavailable(self, client):
         """Test GET /agents/{id}/messages returns 404 when unavailable."""
-        with patch("myclaw.AGENT_TOOLS_AVAILABLE", False):
+        with patch("config.settings.enable_agent_tools", False):
             response = client.get("/agents/main/messages")
             assert response.status_code == 404
 
     def test_agent_events_unavailable(self, client):
         """Test GET /agents/{id}/events returns 404 when unavailable."""
-        with patch("myclaw.AGENT_TOOLS_AVAILABLE", False):
+        with patch("config.settings.enable_agent_tools", False):
             response = client.get("/agents/main/events")
             assert response.status_code == 404
 
@@ -475,7 +475,7 @@ class TestLifespan:
         import asyncio
 
         mock_http = AsyncMock()
-        
+
         async def run():
             async with lifespan(app):
                 # The http client is created inside lifespan

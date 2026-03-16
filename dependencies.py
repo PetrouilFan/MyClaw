@@ -4,11 +4,10 @@ Provides FastAPI dependency injectors for all services and managers.
 """
 
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple
 
 from fastapi import Request
 
-from config import settings
 from session_manager import SessionManager
 from agents.registry import AgentRegistry
 

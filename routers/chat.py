@@ -1,27 +1,20 @@
 """Chat router for MyClaw."""
 
-from typing import Optional
-
 import structlog
 from fastapi import APIRouter, WebSocket, Request, Header, HTTPException
 import httpx
 from fastapi.responses import StreamingResponse
 
 from config import settings
-from api_models import ChatCompletionRequest, Message, ToolCall, FunctionCall
-from dependencies import get_tools, get_http_client
+from api_models import ChatCompletionRequest, Message
 from session_manager import get_session_manager as get_global_session_manager
 from context_builder import get_context_builder
 from tools._loader import load_tools
-from tools.tool_parser import clean_content, extract_tool_calls
-from session_manager import SessionManager
 from services.tool_executor import ToolExecutor
-from tools._loader import load_tools
-from tools.tool_parser import clean_content, extract_tool_calls
 
 log = structlog.get_logger()
 
-router = APIRouter(prefix="/v1", tags=["chat"])
+router = APIRouter(tags=["chat"])
 
 
 def md() -> str:
@@ -40,19 +33,17 @@ def md() -> str:
 def tools(app_state=None):
     """Get loaded tools."""
     import myclaw
-    
+
     if app_state is None:
         if myclaw._module_tools is None:
             myclaw._module_tools, myclaw._module_tool_funcs = load_tools(
-                project_root=settings.workspace.parent,
-                workspace=settings.workspace
+                project_root=settings.workspace.parent, workspace=settings.workspace
             )
         return myclaw._module_tools
-    
+
     if app_state.tools is None:
         app_state.tools, app_state.tool_funcs = load_tools(
-            project_root=settings.workspace.parent,
-            workspace=settings.workspace
+            project_root=settings.workspace.parent, workspace=settings.workspace
         )
     return app_state.tools
 
@@ -60,18 +51,18 @@ def tools(app_state=None):
 def tool_functions(app_state=None):
     """Get tool functions."""
     import myclaw
-    
+
     if app_state is None:
         if myclaw._module_tool_funcs is None:
             tools()
         return myclaw._module_tool_funcs or {}
-    
+
     if app_state.tool_funcs is None:
         tools(app_state)
     return app_state.tool_funcs
 
 
-@router.websocket("/chat")
+@router.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket):
     """WebSocket endpoint for chat."""
     await websocket.accept()
@@ -85,7 +76,10 @@ async def websocket_chat(websocket: WebSocket):
                 continue
 
             messages = [
-                {"role": "system", "content": settings.system_prompt + ("\n\n" + md() if md() else "")}
+                {
+                    "role": "system",
+                    "content": settings.system_prompt + ("\n\n" + md() if md() else ""),
+                }
             ] + messages
 
             request_data = ChatCompletionRequest(
@@ -122,7 +116,7 @@ async def websocket_chat(websocket: WebSocket):
         pass
 
 
-@router.post("/chat/completions")
+@router.post("/v1/chat/completions")
 async def chat(request: Request, a=Header(None)):
     """Main chat completions endpoint."""
     # Authentication check
@@ -151,8 +145,7 @@ async def chat(request: Request, a=Header(None)):
     if request.app.state.check_upstream:
         try:
             health_resp = await request.app.state.http_client.get(
-                f"{request.app.state.upstream.rstrip('/')}/api/tags", 
-                timeout=5
+                f"{request.app.state.upstream.rstrip('/')}/api/tags", timeout=5
             )
             if health_resp.status_code >= 400:
                 raise HTTPException(503, f"Upstream unhealthy: {health_resp.status_code}")
@@ -225,9 +218,9 @@ async def chat(request: Request, a=Header(None)):
             + [Message(**m) for m in incoming_messages]
         )
     else:
-        request_data.messages = [
-            Message(role="system", content=system_content)
-        ] + [Message(**m) for m in incoming_messages]
+        request_data.messages = [Message(role="system", content=system_content)] + [
+            Message(**m) for m in incoming_messages
+        ]
 
     all_tools = tools(request.app.state)
     if all_tools:
@@ -244,6 +237,7 @@ async def chat(request: Request, a=Header(None)):
 
     # Streaming response
     if request_data.stream:
+
         async def g():
             try:
                 async with request.app.state.http_client.stream(
@@ -251,9 +245,11 @@ async def chat(request: Request, a=Header(None)):
                     f"{request.app.state.upstream.rstrip('/')}/v1/chat/completions",
                     json=request_data.model_dump(),
                     headers={
-                        "Authorization": f"Bearer {request.app.state.api_key}" if request.app.state.api_key else "",
+                        "Authorization": f"Bearer {request.app.state.api_key}"
+                        if request.app.state.api_key
+                        else "",
                         "Content-Type": "application/json",
-                    }
+                    },
                 ) as x:
                     if x.status_code >= 400:
                         yield f'{{"error":"Upstream {x.status_code}"}}\\n'
@@ -291,15 +287,14 @@ async def chat(request: Request, a=Header(None)):
 
     # Execute the tool execution loop
     result = await executor.execute_loop(request_data, tool_funcs)
-    
+
     # Check if result contains an error
     if isinstance(result, dict) and "error" in result:
         error = result["error"]
         raise HTTPException(
-            status_code=error.get("code", 500),
-            detail=error.get("message", "Unknown error")
+            status_code=error.get("code", 500), detail=error.get("message", "Unknown error")
         )
-    
+
     return result
 
 

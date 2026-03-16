@@ -2,43 +2,28 @@
 """myclaw — minimal OpenClaw-like LLM middleware."""
 
 import asyncio
-import json
 import os
-import time
 from pathlib import Path
 from typing import Optional
 
 import httpx
-import uvicorn
 import structlog
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi import WebSocket
+from fastapi.responses import JSONResponse
 from config import settings
-from api_models import ChatCompletionRequest, Message, ToolCall, FunctionCall
-from dependencies import get_tools, get_session_manager, get_agent_registry, get_http_client
-from services.tool_executor import ToolExecutor
 
 # Import routers
 from routers.chat import router as chat_router
 from routers.agents import router as agents_router
 from routers.admin import router as admin_router
 
-from agent_loop import (
-    add_planning_to_system_prompt,
-    get_planning_agent,
-    ErrorFormatter,
-)
-from tools._loader import invalidate_cache, load_tools
-from tools.tool_parser import clean_content, extract_tool_calls
-
-from session_manager import SessionManager, get_session_manager as get_global_session_manager
-from context_builder import get_context_builder
+from tools._loader import load_tools
+from session_manager import SessionManager
 from agents.registry import AgentRegistry
 
 import metrics
@@ -47,8 +32,6 @@ RATE_LIMIT_PER_MINUTE = 60
 
 try:
     from agents.tools import TOOLS as AGENT_TOOLS, TOOL_FUNCTIONS as AGENT_TOOL_FUNCTIONS
-    from agents.manager import get_agent_manager
-    from agents.events import get_event_manager
 
     AGENT_TOOLS_AVAILABLE = True
 except ImportError:
@@ -212,40 +195,28 @@ async def general_exception_handler(request: Request, exc: Exception):
     return _create_error_response("Internal server error", 500, {"error_type": type(exc).__name__})
 
 
-def md() -> str:
-    parts = []
-    for n in settings.mds:
-        try:
-            fp = settings.workspace / n
-            if fp.exists():
-                parts.append(f"<!-- {n} -->\n{fp.read_text().strip()}")
-        except Exception as e:
-            log.warning("failed_to_read_md", filename=n, error=str(e))
-    return "\n\n".join(parts)
-
-
 def tools(app_state=None):
     global _module_tools, _module_tool_funcs
-    
+
     if app_state is None:
         # Use module-level cache for backward compatibility
         if _module_tools is None:
             _module_tools, _module_tool_funcs = load_tools(
-                project_root=Path(__file__).parent,
-                workspace=settings.workspace
+                project_root=Path(__file__).parent, workspace=settings.workspace
             )
             if _module_tools:
                 metrics.tools_loaded.set(len(_module_tools))
         return _module_tools
-    
+
     if app_state.tools is None:
         app_state.tools, app_state.tool_funcs = load_tools(
-            project_root=Path(__file__).parent,
-            workspace=settings.workspace
+            project_root=Path(__file__).parent, workspace=settings.workspace
         )
 
         if settings.enable_agent_tools and AGENT_TOOLS_AVAILABLE:
-            existing_names = {t.get("function", {}).get("name", "") for t in (app_state.tools or [])}
+            existing_names = {
+                t.get("function", {}).get("name", "") for t in (app_state.tools or [])
+            }
             for tool in AGENT_TOOLS:
                 tool_name = tool.get("function", {}).get("name", "")
                 if tool_name and tool_name not in existing_names:
@@ -263,13 +234,13 @@ def tools(app_state=None):
 
 def tool_functions(app_state=None):
     global _module_tool_funcs
-    
+
     if app_state is None:
         # Use module-level cache for backward compatibility
         if _module_tool_funcs is None:
             tools()  # This will populate _module_tool_funcs
         return _module_tool_funcs or {}
-    
+
     if app_state.tool_funcs is None:
         tools(app_state)
     return app_state.tool_funcs
@@ -287,7 +258,7 @@ async def call_tool(n, a, app_state=None):
         if app_state.tool_funcs is None:
             tools(app_state)
         tool_funcs = app_state.tool_funcs
-    
+
     if tool_funcs and n in tool_funcs:
         try:
             from tools.tool_validator import validate_tool_call
@@ -299,6 +270,7 @@ async def call_tool(n, a, app_state=None):
         try:
             func = tool_funcs[n]
             import inspect
+
             if inspect.iscoroutinefunction(func):
                 return await func(**a)
             return func(**a)
@@ -328,218 +300,16 @@ def _dedupe(client, server):
     return server + [t for t in client if (t.get("function") or {}).get("name") not in seen]
 
 
-@app.get("/health")
-def _h(request: Request):
-    return {
-        "status": "ok",
-        "workspace": str(settings.workspace),
-        "version": "0.1.0",
-        "tools_loaded": len(tools(request.app.state)) if tools(request.app.state) else 0,
-        "session_enabled": settings.session_enabled,
-        "stateless_mode": settings.stateless_mode,
-    }
-
-
-@app.get("/sessions")
-async def _list_sessions(a=Header(None)):
-    if _auth(a):
-        raise HTTPException(401, "Invalid API key")
-    if not settings.session_enabled or settings.stateless_mode:
-        raise HTTPException(404, "Session management not available")
-
-    sm = get_global_session_manager(
-        storage_dir=settings.session_storage_path_resolved,
-        token_budget=settings.session_token_budget,
-    )
-    sessions = []
-    for path in sm.storage_dir.glob("*.json"):
+def md() -> str:
+    parts = []
+    for n in settings.mds:
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            sessions.append(
-                {
-                    "session_id": data.get("session_id"),
-                    "updated_at": data.get("updated_at"),
-                    "message_count": len(data.get("messages", [])),
-                }
-            )
-        except (json.JSONDecodeError, IOError):
-            pass
-    return {"sessions": sessions, "total": len(sessions)}
-
-
-@app.delete("/sessions/{session_id}")
-async def _delete_session(session_id, a=Header(None)):
-    if _auth(a):
-        raise HTTPException(401, "Invalid API key")
-    if not settings.session_enabled or settings.stateless_mode:
-        raise HTTPException(404, "Session management not available")
-
-    sm = get_global_session_manager(
-        storage_dir=settings.session_storage_path_resolved,
-        token_budget=settings.session_token_budget,
-    )
-    path = sm._get_session_path(session_id)
-    if path.exists():
-        path.unlink()
-        return {"status": "deleted", "session_id": session_id}
-    raise HTTPException(404, "Session not found")
-
-
-@app.get("/agents")
-async def _list_agents(a=Header(None)):
-    """List all agents."""
-    if _auth(a):
-        raise HTTPException(401, "Invalid API key")
-
-    if not AGENT_TOOLS_AVAILABLE:
-        raise HTTPException(404, "Agent system not available")
-
-    from agents.registry import get_agent_registry
-
-    registry = get_agent_registry(
-        workspace=settings.workspace,
-        max_agents=settings.subagent_max_agents,
-        max_depth=settings.subagent_max_depth,
-    )
-
-    parent_id = None
-
-    agents = registry.list_agents(parent_id=parent_id)
-    return {
-        "agents": [a.to_summary() for a in agents],
-        "total": len(agents),
-    }
-
-
-@app.get("/agents/{agent_id}")
-async def _get_agent(agent_id: str, a=Header(None)):
-    """Get agent status."""
-    if _auth(a):
-        raise HTTPException(401, "Invalid API key")
-
-    if not AGENT_TOOLS_AVAILABLE:
-        raise HTTPException(404, "Agent system not available")
-
-    manager = await get_agent_manager()  # type: ignore[possibly-undefined]  # type: ignore[possibly-undefined]
-    status = manager.get_agent_status(agent_id)
-
-    if status is None:
-        raise HTTPException(404, f"Agent '{agent_id}' not found")
-
-    return status
-
-
-@app.delete("/agents/{agent_id}")
-async def _terminate_agent(agent_id: str, a=Header(None)):
-    """Terminate an agent."""
-    if _auth(a):
-        raise HTTPException(401, "Invalid API key")
-
-    if not AGENT_TOOLS_AVAILABLE:
-        raise HTTPException(404, "Agent system not available")
-
-    manager = await get_agent_manager()  # type: ignore[possibly-undefined]
-    result = await manager.terminate_agent(agent_id)
-
-    if not result:
-        raise HTTPException(404, f"Agent '{agent_id}' not found")
-
-    return {"status": "terminated", "agent_id": agent_id}
-
-
-@app.post("/agents/{parent_id}/spawn")
-async def _spawn_agent(parent_id: str, request: Request, a=Header(None)):
-    """Spawn a subagent."""
-    if _auth(a):
-        raise HTTPException(401, "Invalid API key")
-
-    if not AGENT_TOOLS_AVAILABLE:
-        raise HTTPException(404, "Agent system not available")
-
-    try:
-        body = await request.json()
-    except json.JSONDecodeError:
-        return _create_error_response("Invalid JSON", 400)
-
-    name = body.get("name", f"agent-{body.get('task', '')[:20]}")
-    task = body.get("task", "")
-
-    if not task:
-        return _create_error_response("task is required", 400)
-
-    try:
-        manager = await get_agent_manager()  # type: ignore[possibly-undefined]
-        agent = await manager.spawn_agent(
-            name=name,
-            parent_id=parent_id,
-            task=task,
-            metadata=body.get("metadata", {}),
-        )
-        return {
-            "agent_id": agent.id,
-            "name": agent.name,
-            "status": agent.status.value,
-            "message": f"Agent '{name}' spawned successfully",
-        }
-    except ValueError as e:
-        return _create_error_response(str(e), 400)
-    except Exception as e:
-        log.error("spawn_agent_error", error=str(e))
-        return _create_error_response(str(e), 500)
-
-
-@app.get("/agents/{agent_id}/messages")
-async def _get_agent_messages(agent_id: str, a=Header(None)):
-    """Get messages for an agent."""
-    if _auth(a):
-        raise HTTPException(401, "Invalid API key")
-
-    if not AGENT_TOOLS_AVAILABLE:
-        raise HTTPException(404, "Agent system not available")
-
-    manager = await get_agent_manager()  # type: ignore[possibly-undefined]
-    messages = manager.get_messages(agent_id)
-
-    return {
-        "messages": [
-            {
-                "id": m.id,
-                "from": m.from_agent_id,
-                "to": m.to_agent_id,
-                "content": m.content,
-                "timestamp": m.timestamp.isoformat(),
-            }
-            for m in messages
-        ],
-        "count": len(messages),
-    }
-
-
-@app.get("/agents/{agent_id}/events")
-async def _agent_events(agent_id: str):
-    """Server-Sent Events for agent updates."""
-    if not AGENT_TOOLS_AVAILABLE:
-        raise HTTPException(404, "Agent system not available")
-
-    event_manager = get_event_manager()  # type: ignore[possibly-undefined]
-
-    async def event_generator():
-        try:
-            async for event in event_manager.event_stream(agent_id):
-                yield event
-        except asyncio.CancelledError:
-            pass
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+            fp = settings.workspace / n
+            if fp.exists():
+                parts.append(f"<!-- {n} -->\n{fp.read_text().strip()}")
+        except Exception as e:
+            log.warning("failed_to_read_md", filename=n, error=str(e))
+    return "\n\n".join(parts)
 
 
 def _metrics():
@@ -547,97 +317,6 @@ def _metrics():
     from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
-
-
-@app.websocket("/ws/chat")
-async def websocket_chat(websocket: WebSocket):
-    await websocket.accept()
-    try:
-        while True:
-            data = await websocket.receive_json()
-            messages = data.get("messages", [])
-
-            if not messages:
-                await websocket.send_json({"error": "messages required"})
-                continue
-
-            messages = [
-                {
-                    "role": "system",
-                    "content": settings.system_prompt + ("\n\n" + md() if md() else ""),
-                }
-            ] + messages
-
-            request_data = ChatCompletionRequest(
-                model=settings.model,
-                messages=[Message(**m) for m in messages],
-                stream=False,
-            )
-
-            if t := tools(request.app.state):
-                request_data.tools = t
-
-            u, h = (
-                f"{request.app.state.upstream.rstrip('/')}/v1/chat/completions",
-                {
-                    "Authorization": f"Bearer {request.app.state.api_key}" if request.app.state.api_key else "",
-                    "Content-Type": "application/json",
-                },
-            )
-
-            try:
-                x = await request.app.state.http_client.post(u, json=request_data.model_dump(), headers=h)
-                if x.status_code >= 400:
-                    await websocket.send_json({"error": f"Upstream error: {x.status_code}"})
-                    continue
-                response = x.json()
-                await websocket.send_json(response)
-            except Exception as e:
-                log.error("websocket_error", error=str(e))
-                await websocket.send_json({"error": str(e)})
-
-    except Exception:
-        pass
-    finally:
-        await websocket.close()
-
-
-@app.post("/_invalidate_cache")
-async def _ic(a=Header(None)):
-    if _auth(a):
-        raise HTTPException(401, "Invalid API key")
-    invalidate_cache()
-    global _t, _tf
-    _t = _tf = None
-    log.info("cache_invalidated")
-    return {"status": "cache invalidated"}
-
-
-@app.get("/md/{f}")
-async def _gf(f, a=Header(None)):
-    if _auth(a) or f not in settings.mds:
-        raise HTTPException(401 if _auth(a) else 404)
-    return {
-        "filename": f,
-        "content": (settings.workspace / f).read_text()
-        if (settings.workspace / f).exists()
-        else "",
-    }
-
-
-@app.put("/md/{f}")
-async def _pf(f, r: Request, a=Header(None)):
-    if _auth(a) or f not in settings.mds:
-        raise HTTPException(401 if _auth(a) else 404)
-    b = await r.body()
-    if len(b) > settings.max_payload_size:
-        return _create_error_response(
-            "File too large", 413, {"max_size": settings.max_payload_size}
-        )
-    settings.workspace.mkdir(parents=True, exist_ok=True)
-    (settings.workspace / f).write_bytes(b)
-    return {"status": "saved"}
-
 
 
 # Include routers

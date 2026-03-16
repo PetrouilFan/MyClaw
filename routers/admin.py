@@ -1,15 +1,22 @@
 """Admin router for MyClaw."""
 
-import os
-from pathlib import Path
-from typing import Optional
-
 import structlog
 from fastapi import APIRouter, Request, Header, HTTPException
 from fastapi.responses import JSONResponse
 
 from config import settings
 from session_manager import get_session_manager as get_global_session_manager
+
+
+def _auth(a):
+    api_key = settings.api_key
+    if not api_key and not settings.allowed_api_keys:
+        return False
+    if settings.allowed_api_keys:
+        key = a.replace("Bearer ", "") if a else ""
+        return key not in settings.allowed_api_keys
+    return a != f"Bearer {api_key}" and a != api_key
+
 
 log = structlog.get_logger()
 
@@ -19,13 +26,11 @@ router = APIRouter(tags=["admin"])
 @router.get("/health")
 async def health(request: Request):
     """Health check endpoint."""
-    from myclaw import tools, tool_functions
-    
     return {
         "status": "ok",
         "workspace": str(settings.workspace),
         "version": "0.1.0",
-        "tools_loaded": len(tools(request.app.state)) if tools(request.app.state) else 0,
+        "tools_loaded": len(request.app.state.tools or []),
         "session_enabled": settings.session_enabled,
         "stateless_mode": settings.stateless_mode,
     }
@@ -74,6 +79,7 @@ async def delete_session(session_id: str, a=Header(None)):
 async def invalidate_cache(a=Header(None)):
     """Invalidate tool cache."""
     from tools._loader import invalidate_cache
+
     invalidate_cache()
     return {"status": "cache invalidated"}
 
@@ -81,29 +87,36 @@ async def invalidate_cache(a=Header(None)):
 @router.get("/md/{f}")
 async def get_md(f: str, a=Header(None)):
     """Get markdown file content."""
-    if not settings.session_enabled or f not in settings.mds:
-        raise HTTPException(404 if a else 401, "Not found")
+    if _auth(a) or f not in settings.mds:
+        raise HTTPException(401 if _auth(a) else 404)
 
     path = settings.workspace / f
     if not path.exists():
         raise HTTPException(404, "File not found")
 
-    return {"content": path.read_text()}
+    return {"filename": f, "content": path.read_text()}
 
 
 @router.put("/md/{f}")
 async def put_md(f: str, request: Request, a=Header(None)):
     """Update markdown file content."""
-    if not settings.session_enabled or f not in settings.mds:
-        raise HTTPException(404 if a else 401, "Not found")
+    if _auth(a) or f not in settings.mds:
+        raise HTTPException(401 if _auth(a) else 404)
 
-    data = await request.json()
-    content = data.get("content", "")
-
-    if len(content) > 10000:
-        raise HTTPException(400, "File too large")
+    b = await request.body()
+    if len(b) > settings.max_payload_size:
+        return JSONResponse(
+            status_code=413,
+            content={
+                "error": {
+                    "message": "File too large",
+                    "code": 413,
+                    "details": {"max_size": settings.max_payload_size},
+                }
+            },
+        )
 
     path = settings.workspace / f
-    path.write_text(content)
+    path.write_bytes(b)
 
-    return {"status": "updated", "file": f}
+    return {"status": "saved"}
