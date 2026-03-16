@@ -11,8 +11,7 @@ from httpx import Response
 def mock_ollama():
     """Mock the upstream Ollama API."""
     from myclaw import app
-    import httpx
-    
+
     mock_http = AsyncMock()
     mock_response = Response(
         200,
@@ -30,21 +29,21 @@ def mock_ollama():
     mock_http.get = AsyncMock(return_value=Response(200, json={"models": []}))
     mock_http.post = AsyncMock(return_value=mock_response)
     mock_http.stream = AsyncMock()
-    
+
     # Initialize app.state attributes if they don't exist
-    if not hasattr(app.state, 'http_client'):
+    if not hasattr(app.state, "http_client"):
         app.state.http_client = mock_http
-    if not hasattr(app.state, 'check_upstream'):
+    if not hasattr(app.state, "check_upstream"):
         app.state.check_upstream = False
-    if not hasattr(app.state, 'upstream'):
+    if not hasattr(app.state, "upstream"):
         app.state.upstream = "http://localhost:11434"
-    if not hasattr(app.state, 'api_key'):
+    if not hasattr(app.state, "api_key"):
         app.state.api_key = ""
-    
+
     # Store original and replace with mock
     original_http = app.state.http_client
     app.state.http_client = mock_http
-    
+
     try:
         yield mock_http
     finally:
@@ -59,7 +58,7 @@ def client(mock_ollama):
 
     # Store the mock http_client from mock_ollama
     mock_http = mock_ollama
-    
+
     with TestClient(app=app) as test_client:
         # Ensure the mock is still in place after TestClient creation
         app.state.http_client = mock_http

@@ -474,8 +474,6 @@ class TestLifespan:
         from myclaw import lifespan, app
         import asyncio
 
-        mock_http = AsyncMock()
-
         async def run():
             async with lifespan(app):
                 # The http client is created inside lifespan
