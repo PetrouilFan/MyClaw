@@ -171,7 +171,14 @@ class ToolExecutor:
 
             tc += 1
 
-        return R
+        log.warning("max_tool_calls_reached", max_calls=settings.max_tool_calls)
+        return {
+            "error": {
+                "message": f"Max tool calls ({settings.max_tool_calls}) reached",
+                "code": 400,
+                "details": {"max_calls": settings.max_tool_calls},
+            }
+        }
 
     async def _call_tool(
         self,

@@ -28,8 +28,7 @@ class Message(BaseModel):
     tool_calls: Optional[list[ToolCall]] = None
     tool_call_id: Optional[str] = None
 
-    class Config:
-        extra = "allow"
+    model_config = {"extra": "allow"}
 
 
 class ChatCompletionRequest(BaseModel):

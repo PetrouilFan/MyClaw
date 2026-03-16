@@ -4,11 +4,16 @@ from typing import Optional
 
 import structlog
 from fastapi import APIRouter, WebSocket, Request, Header, HTTPException
+import httpx
 from fastapi.responses import StreamingResponse
 
 from config import settings
 from api_models import ChatCompletionRequest, Message, ToolCall, FunctionCall
-from dependencies import get_tools, get_session_manager, get_http_client
+from dependencies import get_tools, get_http_client
+from session_manager import get_session_manager as get_global_session_manager
+from context_builder import get_context_builder
+from tools._loader import load_tools
+from tools.tool_parser import clean_content, extract_tool_calls
 from session_manager import SessionManager
 from services.tool_executor import ToolExecutor
 from tools._loader import load_tools
@@ -34,15 +39,15 @@ def md() -> str:
 
 def tools(app_state=None):
     """Get loaded tools."""
-    from myclaw import _module_tools, _module_tool_funcs
+    import myclaw
     
     if app_state is None:
-        if _module_tools is None:
-            _module_tools, _module_tool_funcs = load_tools(
+        if myclaw._module_tools is None:
+            myclaw._module_tools, myclaw._module_tool_funcs = load_tools(
                 project_root=settings.workspace.parent,
                 workspace=settings.workspace
             )
-        return _module_tools
+        return myclaw._module_tools
     
     if app_state.tools is None:
         app_state.tools, app_state.tool_funcs = load_tools(
@@ -54,12 +59,12 @@ def tools(app_state=None):
 
 def tool_functions(app_state=None):
     """Get tool functions."""
-    from myclaw import _module_tool_funcs
+    import myclaw
     
     if app_state is None:
-        if _module_tool_funcs is None:
+        if myclaw._module_tool_funcs is None:
             tools()
-        return _module_tool_funcs or {}
+        return myclaw._module_tool_funcs or {}
     
     if app_state.tool_funcs is None:
         tools(app_state)
@@ -105,7 +110,7 @@ async def websocket_chat(websocket: WebSocket):
             )
 
             try:
-                x = await http_client.post(u, json=request_data.dict(), headers=h)
+                x = await http_client.post(u, json=request_data.model_dump(), headers=h)
                 if x.status_code >= 400:
                     await websocket.send_json({"error": f"Upstream error: {x.status_code}"})
                     continue
@@ -140,7 +145,21 @@ async def chat(request: Request, a=Header(None)):
         request_data_json = await request.json()
         request_data = ChatCompletionRequest(**request_data_json)
     except Exception as e:
-        return {"error": {"message": f"Invalid request: {str(e)}", "code": 400}}
+        raise HTTPException(400, f"Invalid request: {str(e)}")
+
+    # Health check upstream if configured
+    if request.app.state.check_upstream:
+        try:
+            health_resp = await request.app.state.http_client.get(
+                f"{request.app.state.upstream.rstrip('/')}/api/tags", 
+                timeout=5
+            )
+            if health_resp.status_code >= 400:
+                raise HTTPException(503, f"Upstream unhealthy: {health_resp.status_code}")
+        except httpx.TimeoutException:
+            raise HTTPException(504, "Upstream timeout")
+        except httpx.ConnectError as e:
+            raise HTTPException(503, f"Upstream unreachable: {str(e)}")
 
     session_history = []
 
@@ -152,13 +171,13 @@ async def chat(request: Request, a=Header(None)):
         if not session_id:
             client_ip = request.client.host if request.client else ""
             user_agent = request.headers.get("user-agent", "")
-            sm = get_session_manager(
+            sm = get_global_session_manager(
                 storage_dir=settings.session_storage_path_resolved,
                 token_budget=settings.session_token_budget,
             )
             session_id = sm.generate_session_id(ip=client_ip, user_agent=user_agent)
 
-        sm = get_session_manager(
+        sm = get_global_session_manager(
             storage_dir=settings.session_storage_path_resolved,
             token_budget=settings.session_token_budget,
         )
@@ -230,7 +249,7 @@ async def chat(request: Request, a=Header(None)):
                 async with request.app.state.http_client.stream(
                     "POST",
                     f"{request.app.state.upstream.rstrip('/')}/v1/chat/completions",
-                    json=request_data.dict(),
+                    json=request_data.model_dump(),
                     headers={
                         "Authorization": f"Bearer {request.app.state.api_key}" if request.app.state.api_key else "",
                         "Content-Type": "application/json",
@@ -252,7 +271,7 @@ async def chat(request: Request, a=Header(None)):
     # Initialize session manager if needed
     sm = None
     if settings.session_enabled and not stateless_mode and session_id:
-        sm = get_session_manager(
+        sm = get_global_session_manager(
             storage_dir=settings.session_storage_path_resolved,
             token_budget=settings.session_token_budget,
         )
@@ -271,7 +290,17 @@ async def chat(request: Request, a=Header(None)):
     tool_funcs = tool_functions(request.app.state) or {}
 
     # Execute the tool execution loop
-    return await executor.execute_loop(request_data, tool_funcs)
+    result = await executor.execute_loop(request_data, tool_funcs)
+    
+    # Check if result contains an error
+    if isinstance(result, dict) and "error" in result:
+        error = result["error"]
+        raise HTTPException(
+            status_code=error.get("code", 500),
+            detail=error.get("message", "Unknown error")
+        )
+    
+    return result
 
 
 def _dedupe(client, server):
