@@ -24,6 +24,11 @@ from api_models import ChatCompletionRequest, Message, ToolCall, FunctionCall
 from dependencies import get_tools, get_session_manager, get_agent_registry, get_http_client
 from services.tool_executor import ToolExecutor
 
+# Import routers
+from routers.chat import router as chat_router
+from routers.agents import router as agents_router
+from routers.admin import router as admin_router
+
 from agent_loop import (
     add_planning_to_system_prompt,
     get_planning_agent,
@@ -912,6 +917,12 @@ async def chat(request: Request, a=Header(None)):
         log.error("chat_error", error=str(e), error_type=type(e).__name__)
         return _create_error_response(str(e), 500, {"error_type": type(e).__name__})
 
+
+
+# Include routers
+app.include_router(admin_router)
+app.include_router(agents_router)
+app.include_router(chat_router)
 
 if __name__ == "__main__":
     settings.workspace.mkdir(parents=True, exist_ok=True)
